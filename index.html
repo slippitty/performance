@@ -527,16 +527,19 @@
     </div>
     <div class="chart-row">
       <div class="chart-card">
-        <h4>PP Hill — best VAM per ride (m/hr)</h4>
+        <h4>PP Hill — best VAM per ride (m/hr) <span style="font-size:9px;color:var(--muted);font-weight:normal;">requires FIT upload</span></h4>
         <div class="chart-wrap"><canvas id="progressVAMChart"></canvas></div>
       </div>
       <div class="chart-card">
-        <h4>PP Hill — best w/kg per ride</h4>
+        <h4>PP Hill — best w/kg per ride <span style="font-size:9px;color:var(--muted);font-weight:normal;">requires FIT upload</span></h4>
         <div class="chart-wrap"><canvas id="progressWkgChart"></canvas></div>
       </div>
     </div>
-    <div class="section-title" style="margin-top:8px;">All rides</div>
+    <div class="section-title" style="margin-top:8px;">Outdoor rides</div>
     <div class="rides-list" id="allRidesList"></div>
+
+    <div class="section-title" style="margin-top:20px;">Zwift sessions</div>
+    <div class="rides-list" id="zwiftRidesList"></div>
 
     <div id="progressHillSection" style="margin-top:24px;display:none;">
       <div class="chart-row">
@@ -1405,23 +1408,26 @@ function renderProgress() {
   // Merge: use Strava rides as base (they have more history), supplement with local FIT data
   let allRides = [];
   if (stravaActivities.length) {
-    allRides = stravaActivities.map(a => ({
-      date: a.date,
-      filename: a.name,
-      metrics: {
-        distMiles: a.distMiles,
-        durationSec: a.durationSec,
-        avgPower: a.avgPower,
-        np: a.np,
-        avgHR: a.avgHR,
-        maxHR: a.maxHR,
-        avgSpeed: a.avgSpeed,
-        tss: null,
-        zones: [0,0,0,0,0,0],
-      },
-      hillPasses: [],
-      id: a.id,
-    }));
+    // Only include rides, not runs
+    allRides = stravaActivities
+      .filter(a => !a.type || a.type === 'ride' || !['run','walk','hike'].includes((a.type||'').toLowerCase()))
+      .map(a => ({
+        date: a.date,
+        filename: a.name,
+        metrics: {
+          distMiles: a.distMiles,
+          durationSec: a.durationSec,
+          avgPower: a.avgPower,
+          np: a.np,
+          avgHR: a.avgHR,
+          maxHR: a.maxHR,
+          avgSpeed: a.avgSpeed,
+          tss: null,
+          zones: [0,0,0,0,0,0],
+        },
+        hillPasses: [],
+        id: a.id,
+      }));
   } else {
     allRides = localRides;
   }
@@ -1535,7 +1541,9 @@ function renderProgress() {
 
   // All rides list
   const fmtTime = s => { const h=Math.floor(s/3600),m=Math.floor((s%3600)/60); return h>0?`${h}h ${m}m`:`${m}m`; };
-  document.getElementById('allRidesList').innerHTML = sorted.reverse().map(r => `
+  const outdoorSorted = sorted.filter(r => !r.zwift).reverse();
+  const zwiftSorted   = sorted.filter(r =>  r.zwift).reverse();
+  document.getElementById('allRidesList').innerHTML = outdoorSorted.map(r => `
     <div class="ride-row">
       <div class="ride-date">${(() => { const d = new Date(r.date); return d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true}); })()}</div>
       <div class="ride-name">${r.filename.replace(/\.(fit|gpx|json)$/i,'')}</div>
@@ -1547,6 +1555,22 @@ function renderProgress() {
       <button class="del-btn" onclick="deleteRide(${r.id})" title="Remove">×</button>
     </div>
   `).join('') || '<div style="color:var(--muted);text-align:center;padding:24px;font-family:var(--mono);font-size:12px;">No rides yet</div>';
+
+  // Zwift rides list
+  const zwiftListEl = document.getElementById('zwiftRidesList');
+  if (zwiftListEl) {
+    zwiftListEl.innerHTML = zwiftSorted.map(r => `
+    <div class="ride-row">
+      <div class="ride-date">${(() => { const d = new Date(r.date); return d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}); })()}</div>
+      <div class="ride-name">${(r.filename||r.metrics?.name||'').replace(/\\.(fit|gpx|json)$/i,'')}</div>
+      <div class="ride-stat">${r.metrics?.distMiles||'—'}<span>miles</span></div>
+      <div class="ride-stat">${fmtTime(r.metrics?.durationSec)}<span>time</span></div>
+      <div class="ride-stat">${r.metrics?.np||r.metrics?.avgPower||'—'}<span>NP</span></div>
+      <div class="ride-stat">${r.metrics?.avgHR||'—'}<span>bpm</span></div>
+      <div class="ride-stat">—<span>TSS</span></div>
+    </div>
+  `).join('') || '<div style="color:var(--muted);padding:12px;font-family:var(--mono);font-size:12px;">No Zwift rides yet</div>';
+  }
 }
 
 function deleteRide(id) {
@@ -1699,66 +1723,108 @@ function stravaDisconnect() {
 
 async function loadStravaActivities() {
   const loadEl = document.getElementById('stravaLoading');
+  const setMsg = msg => { if (loadEl) loadEl.textContent = msg; };
   if (loadEl) loadEl.style.display = 'block';
+
   try {
-    const activities = await stravaFetch('/athlete/activities?per_page=50');
-    if (!activities) { toast('Strava sync failed'); if (loadEl) loadEl.style.display='none'; return; }
+    setMsg('Fetching activity list...');
+    const activities = await stravaFetch('/athlete/activities?per_page=100');
+    if (!activities) { toast('Strava sync failed'); if (loadEl) { loadEl.style.display='none'; loadEl.textContent='Syncing from Strava...'; } return; }
 
-    const rides = activities.filter(a => ['Ride','GravelRide','MountainBikeRide','VirtualRide'].includes(a.type) || (a.sport_type||'').includes('Ride'));
+    const isRide = a => ['Ride','GravelRide','MountainBikeRide','VirtualRide','EBikeRide'].includes(a.sport_type||a.type);
+    const isRun  = a => ['Run','TrailRun','VirtualRun','Walk','Hike'].includes(a.sport_type||a.type);
 
-    const summaries = rides.map(a => ({
-      id: a.id, name: a.name, date: a.start_date_local,
+    const rides = activities.filter(isRide);
+    const runs  = activities.filter(isRun);
+
+    // Save run summaries
+    const runSummaries = runs.map(a => ({
+      id: a.id, name: a.name, date: a.start_date_local, type: 'run',
+      distMiles: parseFloat((a.distance * 0.000621371).toFixed(2)),
+      durationSec: a.moving_time,
+      avgHR: a.average_heartrate ? Math.round(a.average_heartrate) : null,
+      avgSpeed: a.average_speed ? parseFloat((a.average_speed * 2.23694).toFixed(1)) : null,
+      avgPaceMPM: a.average_speed && a.average_speed > 0 ? parseFloat((26.8224 / a.average_speed / 60).toFixed(3)) : null,
+      elevGainFt: a.total_elevation_gain ? Math.round(a.total_elevation_gain * 3.28084) : null,
+    }));
+    localStorage.setItem('strava_runs', JSON.stringify(runSummaries));
+
+    // Save ride summaries — tag Zwift vs outdoor
+    const isZwift = a => a.type === 'VirtualRide' || a.sport_type === 'VirtualRide'
+      || (a.name||'').toLowerCase().includes('zwift')
+      || (a.name||'').toLowerCase().includes('watopia')
+      || (a.name||'').toLowerCase().includes('virtual')
+      || (a.device_name||'').toLowerCase().includes('zwift');
+    const rideSummaries = rides.map(a => ({
+      id: a.id, name: a.name, date: a.start_date_local, type: 'ride',
+      zwift: isZwift(a),
       distMiles: parseFloat((a.distance * 0.000621371).toFixed(2)),
       durationSec: a.moving_time,
       avgPower: a.average_watts || null,
       np: a.weighted_average_watts || null,
-      avgHR: a.average_heartrate || null,
+      avgHR: a.average_heartrate ? Math.round(a.average_heartrate) : null,
       maxHR: a.max_heartrate || null,
       avgSpeed: a.average_speed ? parseFloat((a.average_speed * 2.23694).toFixed(1)) : null,
       elevGainFt: a.total_elevation_gain ? Math.round(a.total_elevation_gain * 3.28084) : null,
       sufferScore: a.suffer_score || null,
-      kudos: a.kudos_count,
     }));
-    localStorage.setItem('strava_activities', JSON.stringify(summaries));
+    localStorage.setItem('strava_activities', JSON.stringify(rideSummaries));
 
-    // Load segment efforts from 10 most recent rides
+    // Fetch full details for every ride to get segment efforts
     const segMap = {};
-    for (const ride of rides.slice(0, 10)) {
+    for (let i = 0; i < rides.length; i++) {
+      const ride = rides[i];
+      setMsg('Loading ride ' + (i+1) + ' of ' + rides.length + ': ' + ride.name + '...');
       const detail = await stravaFetch('/activities/' + ride.id + '?include_all_efforts=true');
       if (!detail || !detail.segment_efforts) continue;
       for (const eff of detail.segment_efforts) {
         const seg = eff.segment;
         if (!segMap[seg.id]) {
-          segMap[seg.id] = { id: seg.id, name: seg.name,
+          segMap[seg.id] = {
+            id: seg.id, name: seg.name,
             distMi: parseFloat((seg.distance * 0.000621371).toFixed(2)),
-            grade: seg.average_grade, efforts: [] };
+            grade: seg.average_grade,
+            starred: false,
+            efforts: []
+          };
         }
         segMap[seg.id].efforts.push({
-          date: eff.start_date_local, actId: ride.id, actName: ride.name,
-          elapsed: eff.elapsed_time, moving: eff.moving_time,
-          avgPower: eff.average_watts || null, avgHR: eff.average_heartrate || null,
+          date: eff.start_date_local,
+          actId: ride.id, actName: ride.name,
+          elapsed: eff.elapsed_time,
+          avgPower: eff.average_watts ? Math.round(eff.average_watts) : null,
+          avgHR: eff.average_heartrate ? Math.round(eff.average_heartrate) : null,
           avgSpeed: eff.average_speed ? parseFloat((eff.average_speed * 2.23694).toFixed(1)) : null,
           prRank: eff.pr_rank || null,
         });
       }
     }
 
-    // Fetch PR for each segment
-    for (const seg of Object.values(segMap)) {
-      const info = await stravaFetch('/segments/' + seg.id);
+    // Fetch PR + starred status for each unique segment (batched)
+    const segIds = Object.keys(segMap);
+    setMsg('Loading segment PRs (' + segIds.length + ' segments)...');
+    for (const sid of segIds) {
+      const info = await stravaFetch('/segments/' + sid);
       if (info) {
-        seg.pr = info.athlete_pr_effort ? { elapsed: info.athlete_pr_effort.elapsed_time, date: info.athlete_pr_effort.start_date_local } : null;
-        seg.kom = info.xoms ? (info.xoms.kom || null) : null;
-        seg.starred = info.starred || false;
+        segMap[sid].starred = info.starred || false;
+        segMap[sid].pr = info.athlete_pr_effort ? {
+          elapsed: info.athlete_pr_effort.elapsed_time,
+          date: info.athlete_pr_effort.start_date_local
+        } : null;
+        segMap[sid].kom = info.xoms ? (info.xoms.kom || null) : null;
       }
     }
 
     localStorage.setItem('strava_segments', JSON.stringify(Object.values(segMap)));
     renderStravaContent();
     renderStravaProgress();
-    toast('Synced ' + rides.length + ' rides + ' + Object.keys(segMap).length + ' segments');
-  } catch(e) { console.error(e); toast('Sync error — see console'); }
-  if (loadEl) loadEl.style.display = 'none';
+    renderStravaProgressInProgress();
+    toast('Synced ' + rides.length + ' rides, ' + runs.length + ' runs, ' + segIds.length + ' segments');
+  } catch(e) {
+    console.error('Strava sync error:', e);
+    toast('Sync error: ' + e.message);
+  }
+  if (loadEl) { loadEl.style.display = 'none'; loadEl.textContent = 'Syncing from Strava...'; }
 }
 
 function renderStravaContent() {
@@ -1805,13 +1871,34 @@ function renderStravaContent() {
   }
 
   // Recent rides list
+  // Runs section
+  const stravaRuns = JSON.parse(localStorage.getItem('strava_runs') || '[]');
+  let runsHTML = '';
+  if (stravaRuns.length) {
+    const fmtPace = mpm => { const m=Math.floor(mpm), s=Math.round((mpm-m)*60); return m+':'+String(s).padStart(2,'0')+'/mi'; };
+    runsHTML = '<div class="section-title" style="margin-bottom:12px;margin-top:24px;">Recent runs from Strava</div>'
+      + '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:28px;">';
+    for (const a of stravaRuns.slice(0, 10)) {
+      const fmtDur = s => { const h=Math.floor(s/3600),m=Math.floor((s%3600)/60); return h>0?h+'h '+m+'m':m+'m'; };
+      runsHTML += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 16px;display:grid;grid-template-columns:130px 1fr repeat(4,80px);align-items:center;gap:10px;">'
+        + '<div style="font-family:var(--mono);font-size:10px;color:var(--muted);">' + new Date(a.date).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}) + '</div>'
+        + '<div style="font-size:13px;">' + a.name + (a.zwift ? ' <span style="font-family:var(--mono);font-size:9px;background:rgba(96,200,240,0.15);color:var(--accent2);padding:1px 6px;border-radius:3px;">ZWIFT</span>' : '') + '</div>'
+        + '<div style="font-family:var(--mono);font-size:12px;text-align:right;">' + a.distMiles + '<span style="display:block;font-size:10px;color:var(--muted);">mi</span></div>'
+        + '<div style="font-family:var(--mono);font-size:12px;text-align:right;">' + fmtDur(a.durationSec) + '<span style="display:block;font-size:10px;color:var(--muted);">time</span></div>'
+        + '<div style="font-family:var(--mono);font-size:12px;text-align:right;">' + (a.avgPace ? fmtPace(a.avgPace) : '--') + '<span style="display:block;font-size:10px;color:var(--muted);">pace</span></div>'
+        + '<div style="font-family:var(--mono);font-size:12px;text-align:right;">' + (a.avgHR||'--') + '<span style="display:block;font-size:10px;color:var(--muted);">bpm</span></div>'
+        + '</div>';
+    }
+    runsHTML += '</div>';
+  }
+
   let ridesHTML = '<div class="section-title" style="margin-bottom:12px;">Recent rides from Strava</div>'
     + '<div style="display:flex;flex-direction:column;gap:8px;">';
   for (const a of activities.slice(0, 15)) {
     const fmtDur = s => { const h=Math.floor(s/3600),m=Math.floor((s%3600)/60); return h>0?h+'h '+m+'m':m+'m'; };
     ridesHTML += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 16px;display:grid;grid-template-columns:130px 1fr repeat(5,80px);align-items:center;gap:10px;">'
       + '<div style="font-family:var(--mono);font-size:10px;color:var(--muted);">' + new Date(a.date).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}) + '</div>'
-      + '<div style="font-size:13px;">' + a.name + '</div>'
+      + '<div style="font-size:13px;">' + a.name + (a.zwift ? ' <span style="font-family:var(--mono);font-size:9px;background:rgba(96,200,240,0.15);color:var(--accent2);padding:1px 6px;border-radius:3px;">ZWIFT</span>' : '') + '</div>'
       + '<div style="font-family:var(--mono);font-size:12px;text-align:right;">' + a.distMiles + '<span style="display:block;font-size:10px;color:var(--muted);">mi</span></div>'
       + '<div style="font-family:var(--mono);font-size:12px;text-align:right;">' + fmtDur(a.durationSec) + '<span style="display:block;font-size:10px;color:var(--muted);">time</span></div>'
       + '<div style="font-family:var(--mono);font-size:12px;text-align:right;">' + (a.np||a.avgPower||'--') + '<span style="display:block;font-size:10px;color:var(--muted);">NP</span></div>'
@@ -1821,7 +1908,7 @@ function renderStravaContent() {
   }
   ridesHTML += '</div>';
 
-  content.innerHTML = segsHTML + ridesHTML;
+  content.innerHTML = segsHTML + ridesHTML + runsHTML;
 }
 
 function renderStravaProgress() {
@@ -1947,22 +2034,49 @@ function renderStravaProgressInProgress() {
     });
   }
 
-  // NP trend from Strava activities
+  // NP trend — split Zwift vs outdoor
   const sorted = [...activities].sort((a,b)=>new Date(a.date)-new Date(b.date));
-  const npData = sorted.filter(a=>a.np||a.avgPower).slice(-30);
+  const outdoorRides = sorted.filter(a => !a.zwift && (a.np||a.avgPower));
+  const zwiftRides   = sorted.filter(a =>  a.zwift && (a.np||a.avgPower));
   destroyChart('progressNPStrava');
   const c2 = document.getElementById('progressNPStrava');
-  if (c2 && npData.length) {
+  if (c2 && (outdoorRides.length || zwiftRides.length)) {
+    // Use all dates as x-axis labels
+    const allDates = sorted.filter(a=>a.np||a.avgPower).map(a=>new Date(a.date).toLocaleDateString('en-US',{month:'short',day:'numeric'}));
+    const uniqueDates = [...new Set(allDates)];
+    // Map each date to outdoor/zwift NP (null if no ride that day)
+    const dateToOutdoor = {};
+    const dateToZwift   = {};
+    outdoorRides.forEach(a => { const d=new Date(a.date).toLocaleDateString('en-US',{month:'short',day:'numeric'}); dateToOutdoor[d]=a.np||a.avgPower; });
+    zwiftRides.forEach(a   => { const d=new Date(a.date).toLocaleDateString('en-US',{month:'short',day:'numeric'}); dateToZwift[d]=a.np||a.avgPower; });
+
     charts.progressNPStrava = new Chart(c2, {
       type:'line',
       data:{
-        labels: npData.map(a=>new Date(a.date).toLocaleDateString('en-US',{month:'short',day:'numeric'})),
-        datasets:[{ label:'NP', data:npData.map(a=>a.np||a.avgPower), borderColor:'#c8f060', backgroundColor:'rgba(200,240,96,0.1)', fill:true, tension:0.3, pointRadius:3, pointBackgroundColor:'#c8f060' }]
+        labels: uniqueDates,
+        datasets:[
+          { label:'Outdoor NP', data:uniqueDates.map(d=>dateToOutdoor[d]||null),
+            borderColor:'#c8f060', backgroundColor:'rgba(200,240,96,0.1)',
+            fill:false, tension:0.3, pointRadius:4, pointBackgroundColor:'#c8f060',
+            spanGaps:false, borderWidth:2 },
+          { label:'Zwift NP', data:uniqueDates.map(d=>dateToZwift[d]||null),
+            borderColor:'#60c8f0', backgroundColor:'rgba(96,200,240,0.05)',
+            fill:false, tension:0.3, pointRadius:4, pointBackgroundColor:'#60c8f0',
+            spanGaps:false, borderDash:[4,3], borderWidth:1.5 },
+        ]
       },
       options:{
-        responsive:true,maintainAspectRatio:false,
-        plugins:{legend:{display:false},tooltip:{backgroundColor:'#1e2028',titleColor:'#e8eaf0',bodyColor:'#6b7080'}},
-        scales:{x:{ticks:{color:'#6b7080',font:{family:'DM Mono',size:10}},grid:{color:'#2a2d35'}},y:{ticks:{color:'#6b7080',font:{family:'DM Mono',size:10}},grid:{color:'#2a2d35'}}}
+        responsive:true, maintainAspectRatio:false,
+        plugins:{
+          legend:{labels:{color:'#6b7080',font:{family:'DM Mono',size:10},boxWidth:12}},
+          tooltip:{backgroundColor:'#1e2028',titleColor:'#e8eaf0',bodyColor:'#6b7080',
+            callbacks:{label:ctx=>ctx.dataset.label+': '+ctx.raw+'w'}}
+        },
+        scales:{
+          x:{ticks:{color:'#6b7080',font:{family:'DM Mono',size:10},maxTicksLimit:12},grid:{color:'#2a2d35'}},
+          y:{ticks:{color:'#6b7080',font:{family:'DM Mono',size:10}},grid:{color:'#2a2d35'},
+            title:{display:true,text:'NP (watts)',color:'#6b7080',font:{family:'DM Mono',size:10}}}
+        }
       }
     });
   }
