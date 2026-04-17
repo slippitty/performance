@@ -500,6 +500,9 @@
   <div id="progressEmpty" class="empty-state">
     <h3>Upload more rides to track progress</h3>
     <p>Each ride you upload is stored locally in your browser. Progress charts appear once you have 2+ rides.</p>
+    <div id="progStravaBtn" style="margin-top:16px;display:none;">
+      <button onclick="showTab('strava',event)" style="background:#fc4c02;border:none;color:white;font-family:var(--mono);font-size:11px;padding:8px 18px;border-radius:4px;cursor:pointer;">View Strava Progress</button>
+    </div>
   </div>
   <div id="progressContent" style="display:none">
     <div class="chart-row">
@@ -592,11 +595,14 @@ function updateFTP(v) {
 }
 
 // ── TABS ──────────────────────────────────────────────────────────────────
-function showTab(name) {
+function showTab(name, evt) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
-  event.target.classList.add('active');
+  const e = evt || event;
+  if (e && e.target && e.target.tagName === 'BUTTON') e.target.classList.add('active');
+  // Highlight correct nav button
+  document.querySelectorAll('nav button').forEach(b => { if (b.getAttribute('onclick') && b.getAttribute('onclick').includes("'"+name+"'")) b.classList.add('active'); });
   if (name === 'progress') renderProgress();
   if (name === 'segments' && currentRide) renderSegments(currentRide);
   if (name === 'strava') { renderStravaButton(); if (isStravaConnected()) { renderStravaContent(); renderStravaProgress(); } }
@@ -1228,6 +1234,8 @@ function renderAnalysis(ride) {
 
 // ── RENDER SEGMENTS ───────────────────────────────────────────────────────
 function renderSegments(ride) {
+  const stravaBtn = document.getElementById('segStravaBtn');
+  if (stravaBtn) stravaBtn.style.display = isStravaConnected() ? 'block' : 'none';
   if (!ride) return;
   document.getElementById('segmentsEmpty').style.display = 'none';
   document.getElementById('segmentsContent').style.display = 'block';
@@ -1373,6 +1381,9 @@ function renderSegments(ride) {
 
 // ── RENDER PROGRESS ───────────────────────────────────────────────────────
 function renderProgress() {
+  // Show Strava button if connected and no local rides
+  const stravaBtn = document.getElementById('progStravaBtn');
+  if (stravaBtn) stravaBtn.style.display = isStravaConnected() ? 'block' : 'none';
   const allRides = rides.filter(r => r.metrics);
   if (allRides.length < 1) {
     document.getElementById('progressEmpty').style.display = 'block';
@@ -1777,38 +1788,76 @@ function renderStravaProgress() {
   const segments   = JSON.parse(localStorage.getItem('strava_segments') || '[]');
   if (!activities.length) return;
 
+  const hillChart = document.getElementById('stravaCharts');
+  if (hillChart) hillChart.style.display = 'flex';
+
   // Find PP hill segment
   const ppHill = segments.find(s => s.name && s.name.toLowerCase().includes('prospect park hill'));
   const ppCanvas = document.getElementById('stravaHillChart');
-  if (ppHill && ppHill.efforts.length && ppCanvas) {
-    const sorted = [...ppHill.efforts].sort((a,b) => new Date(a.date)-new Date(b.date));
-    destroyChart('stravaHillChart');
-    charts.stravaHillChart = new Chart(ppCanvas, {
-      type: 'line',
-      data: {
-        labels: sorted.map(e => new Date(e.date).toLocaleDateString('en-US',{month:'short',day:'numeric'})),
-        datasets: [{
-          data: sorted.map(e => e.elapsed),
-          borderColor: '#c8f060', backgroundColor: 'rgba(200,240,96,0.1)',
-          fill: true, tension: 0.3, pointRadius: 5, pointBackgroundColor: '#c8f060',
-        }]
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false }, tooltip: {
+  if (!ppHill || !ppHill.efforts.length || !ppCanvas) return;
+
+  // Group efforts by date — get fastest and average per day
+  const byDate = {};
+  for (const eff of ppHill.efforts) {
+    const day = new Date(eff.date).toLocaleDateString('en-US',{month:'short',day:'numeric'});
+    if (!byDate[day]) byDate[day] = [];
+    byDate[day].push(eff.elapsed);
+  }
+
+  // Sort days chronologically
+  const days = Object.keys(byDate).sort((a,b) => new Date(a+' 2026') - new Date(b+' 2026'));
+  const fastest = days.map(d => Math.min(...byDate[d]));
+  const average = days.map(d => Math.round(byDate[d].reduce((a,b)=>a+b,0)/byDate[d].length));
+  const counts  = days.map(d => byDate[d].length);
+
+  destroyChart('stravaHillChart');
+  charts.stravaHillChart = new Chart(ppCanvas, {
+    type: 'line',
+    data: {
+      labels: days.map((d,i) => d + (counts[i] > 1 ? ' (x'+counts[i]+')' : '')),
+      datasets: [
+        {
+          label: 'Fastest',
+          data: fastest,
+          borderColor: '#c8f060', backgroundColor: 'rgba(200,240,96,0.15)',
+          fill: false, tension: 0.3, pointRadius: 5, pointBackgroundColor: '#c8f060',
+          borderWidth: 2,
+        },
+        {
+          label: 'Average',
+          data: average,
+          borderColor: '#60c8f0', backgroundColor: 'rgba(96,200,240,0.1)',
+          fill: false, tension: 0.3, pointRadius: 4, pointBackgroundColor: '#60c8f0',
+          borderDash: [4,3], borderWidth: 1.5,
+        },
+        {
+          label: 'Your PR',
+          data: days.map(() => ppHill.pr ? ppHill.pr.elapsed : null),
+          borderColor: 'rgba(240,96,96,0.5)', borderDash: [6,4],
+          pointRadius: 0, fill: false, borderWidth: 1,
+        }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: '#6b7080', font: { family: 'DM Mono', size: 10 }, boxWidth: 12 } },
+        tooltip: {
           backgroundColor: '#1e2028', titleColor: '#e8eaf0', bodyColor: '#6b7080',
-          callbacks: { label: ctx => fmtSecs(ctx.raw) + ' (' + (ctx.raw > 0 ? fmtSecs(ctx.raw) : '--') + ')' }
-        }},
-        scales: {
-          x: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } },
-          y: { reverse: true, ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 },
-            callback: v => fmtSecs(v) }, grid: { color: '#2a2d35' },
-            title: { display: true, text: 'time (lower = faster)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } }
-          }
+          callbacks: { label: ctx => ctx.dataset.label + ': ' + fmtSecs(ctx.raw) }
+        }
+      },
+      scales: {
+        x: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } },
+        y: {
+          reverse: true,
+          ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 }, callback: v => fmtSecs(v) },
+          grid: { color: '#2a2d35' },
+          title: { display: true, text: 'time — lower is faster', color: '#6b7080', font: { family: 'DM Mono', size: 10 } }
         }
       }
-    });
-  }
+    }
+  });
 }
 
 // Handle OAuth callback on page load
