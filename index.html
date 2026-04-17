@@ -382,6 +382,7 @@
   <button onclick="showTab('analysis')">Analysis</button>
   <button onclick="showTab('segments')">Segments</button>
   <button onclick="showTab('progress')">Progress</button>
+  <button onclick="showTab('strava')">Strava</button>
 </nav>
 
 <main>
@@ -536,11 +537,45 @@
   </div>
 </div>
 
+
+<!-- STRAVA TAB -->
+<div id="tab-strava" class="tab-panel">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;">
+    <div>
+      <div style="font-family:var(--serif);font-size:1.4rem;font-weight:400;">Strava Sync</div>
+      <div style="font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:4px;">Activities, segments, PRs — pulled direct from Strava</div>
+    </div>
+    <div id="stravaConnectBtn"></div>
+  </div>
+  <div id="stravaLoading" style="display:none;font-family:var(--mono);font-size:12px;color:var(--muted);padding:20px 0;letter-spacing:0.08em;">Syncing from Strava...</div>
+
+  <div id="stravaContent" style="display:none"></div>
+
+  <div id="stravaNotConnected" style="text-align:center;padding:60px 20px;">
+    <div style="font-family:var(--serif);font-size:1.3rem;margin-bottom:8px;">Connect Strava to sync automatically</div>
+    <div style="color:var(--muted);font-size:13px;margin-bottom:24px;">Pull your activities, segment times, PRs, and elevation data without manual exports.</div>
+    <button onclick="stravaConnect()" style="background:#fc4c02;border:none;color:white;font-family:var(--mono);font-size:12px;padding:10px 24px;border-radius:5px;cursor:pointer;letter-spacing:0.05em;">Connect with Strava</button>
+  </div>
+
+  <div class="chart-row" id="stravaCharts" style="margin-top:28px;display:none;">
+    <div class="chart-card">
+      <h4>Prospect Park Hill — segment time progression</h4>
+      <div class="chart-wrap"><canvas id="stravaHillChart"></canvas></div>
+    </div>
+  </div>
+</div>
+
 </main>
 
 <div class="toast" id="toast"></div>
 
 <script>
+// ── STRAVA CONFIG ────────────────────────────────────────────────────────
+const STRAVA_CLIENT_ID     = '226635';
+const STRAVA_CLIENT_SECRET = '02bd23b5558d74cc2c24958f18b2b77d57042247';
+const STRAVA_REDIRECT_URI  = 'https://slippitty.github.io/performance/';
+const STRAVA_SCOPE         = 'read,activity:read_all,profile:read_all';
+
 // ── STATE ─────────────────────────────────────────────────────────────────
 let ftp = parseInt(localStorage.getItem('ftp') || '160');
 let rides = JSON.parse(localStorage.getItem('rides') || '[]');
@@ -564,6 +599,7 @@ function showTab(name) {
   event.target.classList.add('active');
   if (name === 'progress') renderProgress();
   if (name === 'segments' && currentRide) renderSegments(currentRide);
+  if (name === 'strava') { renderStravaButton(); if (isStravaConnected()) { renderStravaContent(); renderStravaProgress(); } }
   if (name === 'analysis' && currentRide) renderAnalysis(currentRide);
 }
 
@@ -860,7 +896,7 @@ function processRide(points, filename, fitLaps) {
     laps = detectLaps(valid, distMiles);
   }
 
-  const hillPasses = detectHillPasses(valid, 54); // 54kg body weight
+  const hillPasses = detectHillPasses(valid, 54); // 54kg / 119lbs // 54kg body weight
 
   const ride = {
     id: Date.now(),
@@ -906,67 +942,79 @@ function haversine(lat1, lon1, lat2, lon2) {
 }
 
 // ── PP HILL DETECTION ──────────────────────────────────────────────────────
-// Prospect Park hill: lat 40.664–40.674, alt gain ~20m over ~0.48mi
-// Detects each individual pass automatically from GPS + altitude data
+// Calibrated against GPS data from multiple PP rides.
+// The hill start is around lat 40.6620, alt 15-30m (varies by loop direction).
+// Peak is around lat 40.670-40.671, alt 40-54m.
+// Detects each pass by finding northbound crossing of lat 40.6622 below alt 32m,
+// then tracking to the altitude peak.
 function detectHillPasses(points, bodyWeightKg) {
   const passes = [];
-  let inHill = false, hillStart = null;
   const wkg = bodyWeightKg || 54;
 
-  for (let i = 0; i < points.length; i++) {
+  // Find all northbound crossings of lat ~40.662 with low altitude
+  // These are the hill entry points
+  let lastLat = null;
+  const entryIndices = [];
+  for (let i = 1; i < points.length; i++) {
     const p = points[i];
-    if (!p.lat) continue;
-
-    // Hill entry: lat ~40.664-40.668, alt 15-35m, moving north
-    if (!inHill && p.lat > 40.663 && p.lat < 40.669 && p.ele > 10 && p.ele < 38 && p.speed < 20) {
-      if (i + 10 < points.length) {
-        const future = points[i + 10];
-        if (future.lat && future.lat > p.lat && future.ele > p.ele) {
-          inHill = true;
-          hillStart = i;
-        }
+    if (!p.lat || !p.ele) continue;
+    // Northbound crossing: lat crosses 40.6621, alt < 32m, not too slow (not stopped)
+    if (lastLat && lastLat < 40.6622 && p.lat >= 40.6622 && p.ele < 32 && p.speed > 3) {
+      // Debounce: only if last entry was > 200 points ago
+      if (!entryIndices.length || i - entryIndices[entryIndices.length-1] > 200) {
+        entryIndices.push(i);
       }
     }
+    lastLat = p.lat;
+  }
 
-    // Hill exit: lat > 40.670, alt > 45m
-    if (inHill && p.lat > 40.670 && p.ele > 44) {
-      const chunk = points.slice(hillStart, i + 1);
-      const durSec = chunk[0].time && chunk[chunk.length-1].time
-        ? (chunk[chunk.length-1].time - chunk[0].time) / 1000
-        : chunk.length;
-      const distMi = chunk[chunk.length-1].distance && chunk[0].distance
-        ? chunk[chunk.length-1].distance - chunk[0].distance
-        : 0.48;
-      const altGain = chunk[chunk.length-1].ele - chunk[0].ele;
-      const pows   = chunk.map(x => x.power).filter(x => x > 20);
-      const hrs    = chunk.map(x => x.hr).filter(x => x > 60);
-      const spds   = chunk.map(x => x.speed).filter(x => x > 0);
+  // For each entry, find the altitude peak within the next 400 points
+  for (const si of entryIndices) {
+    const window = points.slice(si, Math.min(si + 450, points.length));
+    if (window.length < 30) continue;
 
-      if (distMi > 0.25 && distMi < 0.8 && durSec > 60) {
-        const avgPow = pows.length ? pows.reduce((a,b)=>a+b,0)/pows.length : null;
-        const avgHR  = hrs.length  ? hrs.reduce((a,b)=>a+b,0)/hrs.length   : null;
-        const avgSpd = spds.length ? spds.reduce((a,b)=>a+b,0)/spds.length : null;
-        const maxPow = pows.length ? Math.max(...pows) : null;
-        const vam    = altGain > 0 ? Math.round((altGain / durSec) * 3600) : null;
-        const wPerKg = avgPow ? parseFloat((avgPow / wkg).toFixed(2)) : null;
-        const cardiacCost = avgPow && avgHR ? parseFloat((avgHR / avgPow).toFixed(2)) : null; // bpm/watt — lower = more efficient
-
-        passes.push({
-          num: passes.length + 1,
-          durSec: Math.round(durSec),
-          distMi: parseFloat(distMi.toFixed(2)),
-          altGain: Math.round(altGain),
-          avgPower: avgPow ? Math.round(avgPow) : null,
-          maxPower: maxPow,
-          avgHR: avgHR ? Math.round(avgHR) : null,
-          avgSpeed: avgSpd ? parseFloat(avgSpd.toFixed(1)) : null,
-          vam, wPerKg, cardiacCost,
-          gradient: distMi > 0 ? parseFloat(((altGain / (distMi * 1609.34)) * 100).toFixed(1)) : null,
-        });
-      }
-      inHill = false;
-      hillStart = null;
+    // Find peak altitude index
+    let peakIdx = 0;
+    for (let j = 1; j < window.length; j++) {
+      if ((window[j].ele || 0) > (window[peakIdx].ele || 0)) peakIdx = j;
     }
+
+    const chunk = window.slice(0, peakIdx + 1);
+    if (chunk.length < 30) continue;
+
+    const start = chunk[0];
+    const peak  = chunk[chunk.length - 1];
+    const altGain = (peak.ele || 0) - (start.ele || 0);
+    if (altGain < 10) continue; // not a real climb
+
+    const durSec = start.time && peak.time ? (peak.time - start.time) / 1000 : chunk.length;
+    if (durSec < 60 || durSec > 600) continue; // sanity check
+
+    const distMi = peak.distance && start.distance ? peak.distance - start.distance : 0.5;
+    if (distMi < 0.3 || distMi > 1.2) continue;
+
+    const pows = chunk.map(x => x.power).filter(x => x > 20);
+    const hrs  = chunk.map(x => x.hr).filter(x => x > 60);
+    const spds = chunk.map(x => x.speed).filter(x => x > 0);
+
+    const avgPow = pows.length ? Math.round(pows.reduce((a,b)=>a+b,0)/pows.length) : null;
+    const avgHR  = hrs.length  ? Math.round(hrs.reduce((a,b)=>a+b,0)/hrs.length)   : null;
+    const avgSpd = spds.length ? parseFloat((spds.reduce((a,b)=>a+b,0)/spds.length).toFixed(1)) : null;
+    const maxPow = pows.length ? Math.max(...pows) : null;
+    const vam    = altGain > 0 && durSec > 0 ? Math.round((altGain / durSec) * 3600) : null;
+    const wPerKg = avgPow ? parseFloat((avgPow / wkg).toFixed(2)) : null;
+    const cardiacCost = avgPow && avgHR ? parseFloat((avgHR / avgPow).toFixed(2)) : null;
+
+    passes.push({
+      num: passes.length + 1,
+      durSec: Math.round(durSec),
+      distMi: parseFloat(distMi.toFixed(2)),
+      altGain: Math.round(altGain),
+      avgPower: avgPow, maxPower: maxPow,
+      avgHR, avgSpeed: avgSpd,
+      vam, wPerKg, cardiacCost,
+      gradient: distMi > 0 ? parseFloat(((altGain / (distMi * 1609.34)) * 100).toFixed(1)) : null,
+    });
   }
   return passes;
 }
@@ -1502,8 +1550,288 @@ function getZoneName(power, ftp) {
   return 'Z6';
 }
 
+
+// ── STRAVA AUTH ───────────────────────────────────────────────────────────
+function stravaConnect() {
+  const url = 'https://www.strava.com/oauth/authorize?client_id=' + STRAVA_CLIENT_ID
+    + '&redirect_uri=' + encodeURIComponent(STRAVA_REDIRECT_URI)
+    + '&response_type=code&scope=' + STRAVA_SCOPE;
+  window.location.href = url;
+}
+
+async function stravaExchangeToken(code) {
+  try {
+    const res = await fetch('https://www.strava.com/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_id: STRAVA_CLIENT_ID, client_secret: STRAVA_CLIENT_SECRET, code, grant_type: 'authorization_code' })
+    });
+    const d = await res.json();
+    if (d.access_token) {
+      localStorage.setItem('strava_access_token', d.access_token);
+      localStorage.setItem('strava_refresh_token', d.refresh_token);
+      localStorage.setItem('strava_expires_at', d.expires_at);
+      localStorage.setItem('strava_athlete', JSON.stringify(d.athlete));
+      return d.access_token;
+    }
+  } catch(e) { console.error('Token exchange error:', e); }
+  return null;
+}
+
+async function stravaRefreshIfNeeded() {
+  const exp = parseInt(localStorage.getItem('strava_expires_at') || '0');
+  if (exp > Math.floor(Date.now()/1000) + 60) return localStorage.getItem('strava_access_token');
+  try {
+    const res = await fetch('https://www.strava.com/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_id: STRAVA_CLIENT_ID, client_secret: STRAVA_CLIENT_SECRET, refresh_token: localStorage.getItem('strava_refresh_token'), grant_type: 'refresh_token' })
+    });
+    const d = await res.json();
+    if (d.access_token) {
+      localStorage.setItem('strava_access_token', d.access_token);
+      localStorage.setItem('strava_refresh_token', d.refresh_token);
+      localStorage.setItem('strava_expires_at', d.expires_at);
+      return d.access_token;
+    }
+  } catch(e) {}
+  return null;
+}
+
+async function stravaFetch(path) {
+  const token = await stravaRefreshIfNeeded();
+  if (!token) return null;
+  try {
+    const res = await fetch('https://www.strava.com/api/v3' + path, { headers: { 'Authorization': 'Bearer ' + token } });
+    if (!res.ok) return null;
+    return res.json();
+  } catch(e) { return null; }
+}
+
+function isStravaConnected() { return !!localStorage.getItem('strava_access_token'); }
+
+function fmtSecs(s) {
+  if (!s) return '--';
+  const m = Math.floor(s/60), sec = s % 60;
+  return m + ':' + String(sec).padStart(2,'0');
+}
+
+function updateStravaNotConnected() {
+  const nc = document.getElementById('stravaNotConnected');
+  const sc = document.getElementById('stravaCharts');
+  if (!nc) return;
+  nc.style.display = isStravaConnected() ? 'none' : 'block';
+  if (sc) sc.style.display = isStravaConnected() ? 'flex' : 'none';
+}
+
+function renderStravaButton() {
+  updateStravaNotConnected();
+  const el = document.getElementById('stravaConnectBtn');
+  if (!el) return;
+  if (isStravaConnected()) {
+    const ath = JSON.parse(localStorage.getItem('strava_athlete') || '{}');
+    el.innerHTML = '<span style="color:var(--accent);font-family:var(--mono);font-size:11px;">Connected as ' + (ath.firstname||'') + ' ' + (ath.lastname||'') + '</span>'
+      + ' <button onclick="loadStravaActivities()" style="background:var(--surface2);border:1px solid var(--accent);color:var(--accent);font-family:var(--mono);font-size:11px;padding:5px 12px;border-radius:4px;cursor:pointer;margin-left:8px;">Sync</button>'
+      + ' <button onclick="stravaDisconnect()" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:var(--mono);font-size:10px;padding:4px 10px;border-radius:4px;cursor:pointer;margin-left:6px;">Disconnect</button>';
+  } else {
+    el.innerHTML = '<button onclick="stravaConnect()" style="background:#fc4c02;border:none;color:white;font-family:var(--mono);font-size:11px;padding:8px 18px;border-radius:4px;cursor:pointer;letter-spacing:0.05em;">Connect with Strava</button>';
+  }
+}
+
+function stravaDisconnect() {
+  ['strava_access_token','strava_refresh_token','strava_expires_at','strava_athlete','strava_activities','strava_segments'].forEach(k => localStorage.removeItem(k));
+  renderStravaButton();
+  document.getElementById('stravaContent').style.display = 'none';
+  toast('Disconnected from Strava');
+}
+
+async function loadStravaActivities() {
+  const loadEl = document.getElementById('stravaLoading');
+  if (loadEl) loadEl.style.display = 'block';
+  try {
+    const activities = await stravaFetch('/athlete/activities?per_page=50');
+    if (!activities) { toast('Strava sync failed'); if (loadEl) loadEl.style.display='none'; return; }
+
+    const rides = activities.filter(a => ['Ride','GravelRide','MountainBikeRide','VirtualRide'].includes(a.type) || (a.sport_type||'').includes('Ride'));
+
+    const summaries = rides.map(a => ({
+      id: a.id, name: a.name, date: a.start_date_local,
+      distMiles: parseFloat((a.distance * 0.000621371).toFixed(2)),
+      durationSec: a.moving_time,
+      avgPower: a.average_watts || null,
+      np: a.weighted_average_watts || null,
+      avgHR: a.average_heartrate || null,
+      maxHR: a.max_heartrate || null,
+      avgSpeed: a.average_speed ? parseFloat((a.average_speed * 2.23694).toFixed(1)) : null,
+      elevGainFt: a.total_elevation_gain ? Math.round(a.total_elevation_gain * 3.28084) : null,
+      sufferScore: a.suffer_score || null,
+      kudos: a.kudos_count,
+    }));
+    localStorage.setItem('strava_activities', JSON.stringify(summaries));
+
+    // Load segment efforts from 10 most recent rides
+    const segMap = {};
+    for (const ride of rides.slice(0, 10)) {
+      const detail = await stravaFetch('/activities/' + ride.id + '?include_all_efforts=true');
+      if (!detail || !detail.segment_efforts) continue;
+      for (const eff of detail.segment_efforts) {
+        const seg = eff.segment;
+        if (!segMap[seg.id]) {
+          segMap[seg.id] = { id: seg.id, name: seg.name,
+            distMi: parseFloat((seg.distance * 0.000621371).toFixed(2)),
+            grade: seg.average_grade, efforts: [] };
+        }
+        segMap[seg.id].efforts.push({
+          date: eff.start_date_local, actId: ride.id, actName: ride.name,
+          elapsed: eff.elapsed_time, moving: eff.moving_time,
+          avgPower: eff.average_watts || null, avgHR: eff.average_heartrate || null,
+          avgSpeed: eff.average_speed ? parseFloat((eff.average_speed * 2.23694).toFixed(1)) : null,
+          prRank: eff.pr_rank || null,
+        });
+      }
+    }
+
+    // Fetch PR for each segment
+    for (const seg of Object.values(segMap)) {
+      const info = await stravaFetch('/segments/' + seg.id);
+      if (info) {
+        seg.pr = info.athlete_pr_effort ? { elapsed: info.athlete_pr_effort.elapsed_time, date: info.athlete_pr_effort.start_date_local } : null;
+        seg.kom = info.xoms ? (info.xoms.kom || null) : null;
+        seg.starred = info.starred || false;
+      }
+    }
+
+    localStorage.setItem('strava_segments', JSON.stringify(Object.values(segMap)));
+    renderStravaContent();
+    renderStravaProgress();
+    toast('Synced ' + rides.length + ' rides + ' + Object.keys(segMap).length + ' segments');
+  } catch(e) { console.error(e); toast('Sync error — see console'); }
+  if (loadEl) loadEl.style.display = 'none';
+}
+
+function renderStravaContent() {
+  const content = document.getElementById('stravaContent');
+  if (!content) return;
+  content.style.display = 'block';
+
+  const activities = JSON.parse(localStorage.getItem('strava_activities') || '[]');
+  const segments   = JSON.parse(localStorage.getItem('strava_segments') || '[]');
+
+  // Sort segments: starred first, then by effort count
+  const sorted = segments.sort((a,b) => (b.starred?1:0)-(a.starred?1:0) || b.efforts.length - a.efforts.length);
+
+  const fmtDate = d => new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric'});
+  const fmtTime = s => { const h=Math.floor(s/3600),m=Math.floor((s%3600)/60); return h>0?h+'h '+m+'m':m+'m'; };
+
+  // Segments table
+  let segsHTML = '';
+  if (sorted.length) {
+    segsHTML = '<div class="section-title" style="margin-bottom:12px;">Segments — recent efforts</div>'
+      + '<div class="chart-card" style="margin-bottom:20px;overflow-x:auto;">'
+      + '<table class="seg-table"><thead><tr>'
+      + '<th>Segment</th><th>Dist</th><th>Grade</th><th>Best this block</th><th>Your PR</th><th>Efforts</th><th>Last effort</th><th>Avg Power</th><th>Avg HR</th>'
+      + '</tr></thead><tbody>';
+
+    for (const seg of sorted.slice(0, 25)) {
+      const best = seg.efforts.reduce((b,e) => e.elapsed < (b?.elapsed||99999) ? e : b, null);
+      const last = seg.efforts.sort((a,b) => new Date(b.date)-new Date(a.date))[0];
+      const isPR = best && seg.pr && best.elapsed <= seg.pr.elapsed;
+      segsHTML += '<tr>'
+        + '<td><span class="seg-name">' + (seg.starred ? '★ ' : '') + seg.name + '</span></td>'
+        + '<td>' + seg.distMi + 'mi</td>'
+        + '<td>' + (seg.grade||0).toFixed(1) + '%</td>'
+        + '<td class="' + (isPR ? 'seg-best' : '') + '">' + (best ? fmtSecs(best.elapsed) : '--')
+          + (best?.prRank === 1 ? ' <span class="pill">PR</span>' : '') + '</td>'
+        + '<td>' + (seg.pr ? fmtSecs(seg.pr.elapsed) + ' <span style="font-size:10px;color:var(--muted);">(' + fmtDate(seg.pr.date) + ')</span>' : '--') + '</td>'
+        + '<td>' + seg.efforts.length + '</td>'
+        + '<td>' + (last ? fmtDate(last.date) : '--') + '</td>'
+        + '<td>' + (best?.avgPower ? best.avgPower + 'w' : '--') + '</td>'
+        + '<td>' + (best?.avgHR ? Math.round(best.avgHR) + 'bpm' : '--') + '</td>'
+        + '</tr>';
+    }
+    segsHTML += '</tbody></table></div>';
+  }
+
+  // Recent rides list
+  let ridesHTML = '<div class="section-title" style="margin-bottom:12px;">Recent rides from Strava</div>'
+    + '<div style="display:flex;flex-direction:column;gap:8px;">';
+  for (const a of activities.slice(0, 15)) {
+    const fmtDur = s => { const h=Math.floor(s/3600),m=Math.floor((s%3600)/60); return h>0?h+'h '+m+'m':m+'m'; };
+    ridesHTML += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 16px;display:grid;grid-template-columns:130px 1fr repeat(5,80px);align-items:center;gap:10px;">'
+      + '<div style="font-family:var(--mono);font-size:10px;color:var(--muted);">' + new Date(a.date).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}) + '</div>'
+      + '<div style="font-size:13px;">' + a.name + '</div>'
+      + '<div style="font-family:var(--mono);font-size:12px;text-align:right;">' + a.distMiles + '<span style="display:block;font-size:10px;color:var(--muted);">mi</span></div>'
+      + '<div style="font-family:var(--mono);font-size:12px;text-align:right;">' + fmtDur(a.durationSec) + '<span style="display:block;font-size:10px;color:var(--muted);">time</span></div>'
+      + '<div style="font-family:var(--mono);font-size:12px;text-align:right;">' + (a.np||a.avgPower||'--') + '<span style="display:block;font-size:10px;color:var(--muted);">NP</span></div>'
+      + '<div style="font-family:var(--mono);font-size:12px;text-align:right;">' + (a.avgHR||'--') + '<span style="display:block;font-size:10px;color:var(--muted);">bpm</span></div>'
+      + '<div style="font-family:var(--mono);font-size:12px;text-align:right;">' + (a.elevGainFt||'--') + '<span style="display:block;font-size:10px;color:var(--muted);">ft gain</span></div>'
+      + '</div>';
+  }
+  ridesHTML += '</div>';
+
+  content.innerHTML = segsHTML + ridesHTML;
+}
+
+function renderStravaProgress() {
+  const activities = JSON.parse(localStorage.getItem('strava_activities') || '[]');
+  const segments   = JSON.parse(localStorage.getItem('strava_segments') || '[]');
+  if (!activities.length) return;
+
+  // Find PP hill segment
+  const ppHill = segments.find(s => s.name && s.name.toLowerCase().includes('prospect park hill'));
+  const ppCanvas = document.getElementById('stravaHillChart');
+  if (ppHill && ppHill.efforts.length && ppCanvas) {
+    const sorted = [...ppHill.efforts].sort((a,b) => new Date(a.date)-new Date(b.date));
+    destroyChart('stravaHillChart');
+    charts.stravaHillChart = new Chart(ppCanvas, {
+      type: 'line',
+      data: {
+        labels: sorted.map(e => new Date(e.date).toLocaleDateString('en-US',{month:'short',day:'numeric'})),
+        datasets: [{
+          data: sorted.map(e => e.elapsed),
+          borderColor: '#c8f060', backgroundColor: 'rgba(200,240,96,0.1)',
+          fill: true, tension: 0.3, pointRadius: 5, pointBackgroundColor: '#c8f060',
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: {
+          backgroundColor: '#1e2028', titleColor: '#e8eaf0', bodyColor: '#6b7080',
+          callbacks: { label: ctx => fmtSecs(ctx.raw) + ' (' + (ctx.raw > 0 ? fmtSecs(ctx.raw) : '--') + ')' }
+        }},
+        scales: {
+          x: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } },
+          y: { reverse: true, ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 },
+            callback: v => fmtSecs(v) }, grid: { color: '#2a2d35' },
+            title: { display: true, text: 'time (lower = faster)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } }
+          }
+        }
+      }
+    });
+  }
+}
+
+// Handle OAuth callback on page load
+async function handleStravaCallback() {
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get('code');
+  if (code) {
+    toast('Connecting to Strava...');
+    window.history.replaceState({}, '', window.location.pathname);
+    const token = await stravaExchangeToken(code);
+    if (token) {
+      renderStravaButton();
+      await loadStravaActivities();
+    } else {
+      toast('Strava connection failed');
+    }
+  }
+}
+
 // Init
 renderUploadedList();
+renderStravaButton();
+handleStravaCallback();
 renderProgress();
 </script>
 </body>
