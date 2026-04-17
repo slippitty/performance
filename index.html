@@ -1,0 +1,1273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ride Analysis — Iceland Training</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@300;400;500&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0e0f11;
+    --surface: #16181c;
+    --surface2: #1e2028;
+    --border: #2a2d35;
+    --accent: #c8f060;
+    --accent2: #60c8f0;
+    --accent3: #f0a060;
+    --text: #e8eaf0;
+    --muted: #6b7080;
+    --danger: #f06060;
+    --serif: 'Instrument Serif', Georgia, serif;
+    --mono: 'DM Mono', monospace;
+    --sans: 'DM Sans', sans-serif;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  /* HEADER */
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 28px 40px 24px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+  }
+  .header-left h1 {
+    font-family: var(--serif);
+    font-size: 2rem;
+    font-weight: 400;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+  }
+  .header-left h1 em {
+    color: var(--accent);
+    font-style: italic;
+  }
+  .header-sub {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 6px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .ftp-badge {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    text-align: right;
+  }
+  .ftp-badge span {
+    display: block;
+    font-size: 22px;
+    color: var(--accent);
+    font-weight: 500;
+    letter-spacing: -0.02em;
+  }
+  .ftp-badge input {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--accent);
+    font-family: var(--mono);
+    font-size: 18px;
+    width: 80px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    text-align: center;
+    margin-top: 2px;
+  }
+
+  /* TABS */
+  nav {
+    display: flex;
+    gap: 0;
+    padding: 0 40px;
+    border-bottom: 1px solid var(--border);
+  }
+  nav button {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 14px 20px 12px;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  nav button:hover { color: var(--text); }
+  nav button.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* MAIN */
+  main { padding: 32px 40px; max-width: 1400px; }
+
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* UPLOAD ZONE */
+  .upload-area {
+    border: 1.5px dashed var(--border);
+    border-radius: 12px;
+    padding: 56px 40px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    position: relative;
+    margin-bottom: 32px;
+  }
+  .upload-area:hover, .upload-area.drag { border-color: var(--accent); background: rgba(200,240,96,0.03); }
+  .upload-area input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
+  .upload-icon {
+    width: 40px; height: 40px;
+    border: 1.5px solid var(--muted);
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    margin: 0 auto 16px;
+    font-size: 18px;
+  }
+  .upload-area h3 { font-family: var(--serif); font-size: 1.3rem; font-weight: 400; margin-bottom: 8px; }
+  .upload-area p { color: var(--muted); font-size: 13px; }
+  .upload-area .formats {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    color: var(--accent);
+    margin-top: 12px;
+    text-transform: uppercase;
+  }
+
+  /* STATS ROW */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 12px;
+    margin-bottom: 28px;
+  }
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+    position: relative;
+    overflow: hidden;
+  }
+  .stat-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--accent-color, var(--accent));
+  }
+  .stat-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .stat-value {
+    font-family: var(--mono);
+    font-size: 22px;
+    font-weight: 500;
+    color: var(--text);
+    letter-spacing: -0.02em;
+  }
+  .stat-value small { font-size: 12px; color: var(--muted); margin-left: 2px; }
+  .stat-sub { font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .stat-delta { font-size: 11px; margin-top: 3px; }
+  .stat-delta.up { color: var(--accent); }
+  .stat-delta.down { color: var(--danger); }
+
+  /* CHARTS */
+  .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+  .chart-row.single { grid-template-columns: 1fr; }
+  .chart-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 20px 16px;
+  }
+  .chart-card h4 {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 14px;
+  }
+  .chart-wrap { position: relative; height: 200px; }
+  .chart-wrap.tall { height: 260px; }
+
+  /* SEGMENTS TABLE */
+  .seg-table { width: 100%; border-collapse: collapse; }
+  .seg-table th {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    text-align: left;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .seg-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(42,45,53,0.6);
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .seg-table tr:last-child td { border-bottom: none; }
+  .seg-table tr:hover td { background: rgba(255,255,255,0.02); }
+  .seg-name { color: var(--text); font-size: 12px; }
+  .seg-best { color: var(--accent); }
+  .seg-worst { color: var(--muted); }
+  .pill {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 20px;
+    background: rgba(200,240,96,0.1);
+    color: var(--accent);
+  }
+  .pill.blue { background: rgba(96,200,240,0.1); color: var(--accent2); }
+  .pill.orange { background: rgba(240,160,96,0.1); color: var(--accent3); }
+
+  /* PROGRESS TAB */
+  .rides-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 28px; }
+  .ride-row {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 18px;
+    display: grid;
+    grid-template-columns: 140px 1fr repeat(5, 90px) 36px;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .ride-row:hover { border-color: var(--muted); }
+  .ride-row.selected { border-color: var(--accent); }
+  .ride-date { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .ride-name { font-size: 13px; color: var(--text); }
+  .ride-stat { font-family: var(--mono); font-size: 12px; text-align: right; }
+  .ride-stat span { display: block; font-size: 10px; color: var(--muted); }
+  .del-btn {
+    background: none; border: 1px solid var(--border);
+    color: var(--muted); border-radius: 4px;
+    width: 28px; height: 28px; cursor: pointer;
+    font-size: 14px; display: flex; align-items: center; justify-content: center;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .del-btn:hover { border-color: var(--danger); color: var(--danger); }
+
+  /* HILL BENCHMARK SECTION */
+  .benchmark-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .bench-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    text-align: center;
+  }
+  .bench-card .date { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.08em; }
+  .bench-card .time { font-family: var(--mono); font-size: 28px; color: var(--accent); letter-spacing: -0.03em; }
+  .bench-card .meta { font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .bench-card .target { font-size: 10px; color: var(--muted); margin-top: 4px; font-style: italic; }
+  .bench-card.achieved .time { color: var(--accent); }
+  .bench-card.pending .time { color: var(--muted); }
+  .bench-card.pending { opacity: 0.5; }
+
+  /* ZONE BARS */
+  .zone-bars { display: flex; flex-direction: column; gap: 6px; }
+  .zone-bar-row { display: flex; align-items: center; gap: 10px; }
+  .zone-bar-label { font-family: var(--mono); font-size: 10px; color: var(--muted); width: 24px; text-align: right; }
+  .zone-bar-track { flex: 1; background: var(--surface2); border-radius: 3px; height: 8px; overflow: hidden; }
+  .zone-bar-fill { height: 100%; border-radius: 3px; transition: width 0.8s ease; }
+  .zone-bar-pct { font-family: var(--mono); font-size: 10px; color: var(--muted); width: 36px; text-align: right; }
+
+  /* EMPTY STATE */
+  .empty-state { text-align: center; padding: 60px 20px; color: var(--muted); }
+  .empty-state h3 { font-family: var(--serif); font-size: 1.4rem; font-weight: 400; color: var(--text); margin-bottom: 8px; }
+
+  /* TOAST */
+  .toast {
+    position: fixed; bottom: 24px; right: 24px;
+    background: var(--surface2);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 10px 18px;
+    border-radius: 6px;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.2s, transform 0.2s;
+    pointer-events: none;
+    z-index: 100;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+
+  /* LOADING */
+  .loading {
+    display: none;
+    text-align: center;
+    padding: 40px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+  }
+  .loading.show { display: block; }
+  @keyframes pulse { 0%,100%{opacity:0.4} 50%{opacity:1} }
+  .loading span { animation: pulse 1.2s infinite; }
+
+  .section-title {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 14px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  @media (max-width: 900px) {
+    header { flex-direction: column; align-items: flex-start; padding: 20px; }
+    nav { padding: 0 20px; }
+    main { padding: 20px; }
+    .chart-row { grid-template-columns: 1fr; }
+    .benchmark-row { grid-template-columns: 1fr 1fr; }
+    .ride-row { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-left">
+    <h1>Ride <em>Analysis</em></h1>
+    <div class="header-sub">Iceland Gravel Training · Apr – Jul 2026</div>
+  </div>
+  <div class="ftp-badge">
+    FTP (watts)
+    <input type="number" id="ftpInput" value="160" min="100" max="400" onchange="updateFTP(this.value)">
+  </div>
+</header>
+
+<nav>
+  <button class="active" onclick="showTab('upload')">Upload</button>
+  <button onclick="showTab('analysis')">Analysis</button>
+  <button onclick="showTab('segments')">Segments</button>
+  <button onclick="showTab('progress')">Progress</button>
+</nav>
+
+<main>
+
+<!-- UPLOAD TAB -->
+<div id="tab-upload" class="tab-panel active">
+  <div class="upload-area" id="dropZone">
+    <input type="file" id="fileInput" accept=".fit,.gpx,.json" multiple onchange="handleFiles(this.files)">
+    <div class="upload-icon">↑</div>
+    <h3>Drop your activity file here</h3>
+    <p>Drag & drop or click to browse. Works with Garmin and Strava exports.</p>
+    <div class="formats">.FIT · .GPX · .JSON</div>
+  </div>
+  <div class="loading" id="loadingMsg"><span>Parsing activity data…</span></div>
+
+  <div id="uploadedList" class="rides-list"></div>
+
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;margin-top:8px;">
+    <div class="section-title">How to export</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;">
+      <div>
+        <div style="font-family:var(--mono);font-size:11px;color:var(--accent);margin-bottom:8px;">GARMIN CONNECT</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.8;">
+          Activity → ⋯ menu → Export Original<br>
+          Downloads a <strong style="color:var(--text)">.fit</strong> file with full power + HR data
+        </div>
+      </div>
+      <div>
+        <div style="font-family:var(--mono);font-size:11px;color:var(--accent2);margin-bottom:8px;">STRAVA</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.8;">
+          Activity → ⋯ → Export GPX<br>
+          Downloads a <strong style="color:var(--text)">.gpx</strong> file. HR included; power if your device recorded it.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ANALYSIS TAB -->
+<div id="tab-analysis" class="tab-panel">
+  <div id="analysisEmpty" class="empty-state">
+    <h3>No activity loaded</h3>
+    <p>Upload a .fit or .gpx file to see your analysis</p>
+  </div>
+  <div id="analysisContent" style="display:none">
+    <div class="stats-grid" id="statsGrid"></div>
+
+    <div class="chart-row">
+      <div class="chart-card">
+        <h4>Power over time</h4>
+        <div class="chart-wrap"><canvas id="powerChart"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <h4>Heart rate over time</h4>
+        <div class="chart-wrap"><canvas id="hrChart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="chart-row">
+      <div class="chart-card">
+        <h4>Power zones — time in zone</h4>
+        <div id="zoneBars" class="zone-bars" style="padding: 8px 0;"></div>
+      </div>
+      <div class="chart-card">
+        <h4>Speed over time</h4>
+        <div class="chart-wrap"><canvas id="speedChart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="chart-row single">
+      <div class="chart-card">
+        <h4>Power vs heart rate (effort map)</h4>
+        <div class="chart-wrap tall"><canvas id="scatterChart"></canvas></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SEGMENTS TAB -->
+<div id="tab-segments" class="tab-panel">
+  <div id="segmentsEmpty" class="empty-state">
+    <h3>No activity loaded</h3>
+    <p>Upload an activity to see segment breakdowns</p>
+  </div>
+  <div id="segmentsContent" style="display:none">
+    <div class="section-title" style="margin-bottom:20px;">Prospect Park Hill Benchmark — 0.48mi @ 5%</div>
+    <div class="benchmark-row" id="benchmarkRow"></div>
+
+    <div class="section-title" style="margin-top:28px;margin-bottom:16px;">Lap breakdown</div>
+    <div class="chart-card" style="margin-bottom:20px;">
+      <div class="chart-wrap" style="height:180px;"><canvas id="lapChart"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <table class="seg-table" id="segTable">
+        <thead>
+          <tr>
+            <th>Lap / Segment</th>
+            <th>Time</th>
+            <th>Avg Power</th>
+            <th>% FTP</th>
+            <th>Avg HR</th>
+            <th>Avg Speed</th>
+            <th>Peak Power</th>
+            <th>Note</th>
+          </tr>
+        </thead>
+        <tbody id="segTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- PROGRESS TAB -->
+<div id="tab-progress" class="tab-panel">
+  <div id="progressEmpty" class="empty-state">
+    <h3>Upload more rides to track progress</h3>
+    <p>Each ride you upload is stored locally in your browser. Progress charts appear once you have 2+ rides.</p>
+  </div>
+  <div id="progressContent" style="display:none">
+    <div class="chart-row">
+      <div class="chart-card">
+        <h4>Avg power over time (w)</h4>
+        <div class="chart-wrap"><canvas id="progressPowerChart"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <h4>PP Hill time — benchmark progression</h4>
+        <div class="chart-wrap"><canvas id="progressHillChart"></canvas></div>
+      </div>
+    </div>
+    <div class="chart-row">
+      <div class="chart-card">
+        <h4>Avg heart rate trend</h4>
+        <div class="chart-wrap"><canvas id="progressHRChart"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <h4>Distance per ride (mi)</h4>
+        <div class="chart-wrap"><canvas id="progressDistChart"></canvas></div>
+      </div>
+    </div>
+    <div class="section-title" style="margin-top:8px;">All rides</div>
+    <div class="rides-list" id="allRidesList"></div>
+  </div>
+</div>
+
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ── STATE ─────────────────────────────────────────────────────────────────
+let ftp = parseInt(localStorage.getItem('ftp') || '160');
+let rides = JSON.parse(localStorage.getItem('rides') || '[]');
+let currentRide = null;
+let charts = {};
+
+document.getElementById('ftpInput').value = ftp;
+
+function updateFTP(v) {
+  ftp = parseInt(v) || 160;
+  localStorage.setItem('ftp', ftp);
+  if (currentRide) renderAnalysis(currentRide);
+  toast('FTP updated to ' + ftp + 'w');
+}
+
+// ── TABS ──────────────────────────────────────────────────────────────────
+function showTab(name) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  event.target.classList.add('active');
+  if (name === 'progress') renderProgress();
+}
+
+// ── TOAST ─────────────────────────────────────────────────────────────────
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// ── FILE HANDLING ─────────────────────────────────────────────────────────
+const dropZone = document.getElementById('dropZone');
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag');
+  handleFiles(e.dataTransfer.files);
+});
+
+function handleFiles(files) {
+  Array.from(files).forEach(file => {
+    const ext = file.name.split('.').pop().toLowerCase();
+    document.getElementById('loadingMsg').classList.add('show');
+    const reader = new FileReader();
+    if (ext === 'gpx') {
+      reader.onload = e => { parseGPX(e.target.result, file.name); document.getElementById('loadingMsg').classList.remove('show'); };
+      reader.readAsText(file);
+    } else if (ext === 'fit') {
+      reader.onload = e => { parseFIT(e.target.result, file.name); document.getElementById('loadingMsg').classList.remove('show'); };
+      reader.readAsArrayBuffer(file);
+    } else if (ext === 'json') {
+      reader.onload = e => { parseJSON(e.target.result, file.name); document.getElementById('loadingMsg').classList.remove('show'); };
+      reader.readAsText(file);
+    }
+  });
+}
+
+// ── GPX PARSER ────────────────────────────────────────────────────────────
+function parseGPX(text, filename) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(text, 'application/xml');
+  const trkpts = doc.querySelectorAll('trkpt');
+  if (!trkpts.length) { toast('No track points found in GPX'); return; }
+
+  const points = [];
+  trkpts.forEach(pt => {
+    const lat = parseFloat(pt.getAttribute('lat'));
+    const lon = parseFloat(pt.getAttribute('lon'));
+    const ele = parseFloat(pt.querySelector('ele')?.textContent || 0);
+    const time = pt.querySelector('time')?.textContent;
+    const hr = parseInt(pt.querySelector('hr, heartrate, HeartRateBpm value, [*|hr]')?.textContent || 0);
+    const power = parseInt(pt.querySelector('power, [*|PowerInWatts], [*|watts]')?.textContent || 0);
+    const cad = parseInt(pt.querySelector('cad, cadence, [*|Cadence]')?.textContent || 0);
+    points.push({ lat, lon, ele, time: time ? new Date(time) : null, hr, power, cad });
+  });
+
+  processRide(points, filename);
+}
+
+// ── FIT PARSER (simplified binary reader) ────────────────────────────────
+function parseFIT(buffer, filename) {
+  // FIT is complex binary; we extract what we can with a best-effort approach
+  // For full FIT support the user can use Garmin's export to GPX instead
+  // Here we attempt basic record extraction
+  try {
+    const bytes = new Uint8Array(buffer);
+    const points = extractFITRecords(bytes);
+    if (points.length < 2) {
+      toast('FIT parsing limited — try exporting as GPX from Garmin Connect for best results');
+      // Still try to show what we have
+      if (points.length === 0) return;
+    }
+    processRide(points, filename);
+  } catch(e) {
+    toast('Could not parse FIT file — please export as GPX from Garmin Connect');
+  }
+}
+
+function extractFITRecords(bytes) {
+  // Simplified FIT extraction — reads known field offsets for common Garmin files
+  const records = [];
+  let i = 14; // skip FIT header
+  const len = bytes.length - 2; // skip CRC
+
+  const defMsgs = {};
+
+  while (i < len) {
+    const recordHeader = bytes[i];
+    if (recordHeader === undefined) break;
+
+    const isCompressed = (recordHeader & 0x80) !== 0;
+    if (isCompressed) { i++; continue; }
+
+    const isDefinition = (recordHeader & 0x40) !== 0;
+    const localMsgType = recordHeader & 0x0F;
+
+    if (isDefinition) {
+      i++; // skip reserved
+      i++; // skip architecture
+      const arch = bytes[i-1]; // 0=little, 1=big
+      const globalMsgNum = arch === 0
+        ? bytes[i] | (bytes[i+1] << 8)
+        : (bytes[i] << 8) | bytes[i+1];
+      i += 2;
+      const numFields = bytes[i++];
+      const fields = [];
+      for (let f = 0; f < numFields; f++) {
+        fields.push({ num: bytes[i], size: bytes[i+1], type: bytes[i+2] });
+        i += 3;
+      }
+      defMsgs[localMsgType] = { globalMsgNum, fields, arch };
+      continue;
+    }
+
+    // Data message
+    i++;
+    const def = defMsgs[localMsgType];
+    if (!def) continue;
+
+    const rec = {};
+    for (const field of def.fields) {
+      if (i + field.size > len) break;
+      let val = 0;
+      if (field.size === 1) val = bytes[i];
+      else if (field.size === 2) val = def.arch === 0 ? bytes[i] | (bytes[i+1]<<8) : (bytes[i]<<8)|bytes[i+1];
+      else if (field.size === 4) val = def.arch === 0
+        ? bytes[i] | (bytes[i+1]<<8) | (bytes[i+2]<<16) | (bytes[i+3]<<24)
+        : (bytes[i]<<24)|(bytes[i+1]<<16)|(bytes[i+2]<<8)|bytes[i+3];
+      i += field.size;
+
+      // global msg 20 = record; field nums: 0=lat,1=lon,2=alt,3=hr,4=cad,5=dist,6=speed,7=power
+      if (def.globalMsgNum === 20) {
+        if (field.num === 0 && val !== 0x7FFFFFFF) rec.lat = val * (180 / Math.pow(2, 31));
+        if (field.num === 1 && val !== 0x7FFFFFFF) rec.lon = val * (180 / Math.pow(2, 31));
+        if (field.num === 2 && val !== 0xFFFF) rec.ele = (val / 5) - 500;
+        if (field.num === 3 && val !== 0xFF) rec.hr = val;
+        if (field.num === 4 && val !== 0xFF) rec.cad = val;
+        if (field.num === 6 && val !== 0xFFFF) rec.speed = (val * 3.6) / 1000; // km/h
+        if (field.num === 7 && val !== 0xFFFF) rec.power = val;
+        if (field.num === 253) rec.timestamp = val; // seconds since FIT epoch (631065600)
+      }
+    }
+
+    if (def.globalMsgNum === 20 && (rec.hr || rec.power || rec.speed)) {
+      if (rec.timestamp) rec.time = new Date((rec.timestamp + 631065600) * 1000);
+      records.push(rec);
+    }
+  }
+  return records;
+}
+
+// ── JSON PARSER (Strava API format) ──────────────────────────────────────
+function parseJSON(text, filename) {
+  try {
+    const data = JSON.parse(text);
+    // Handle Strava activity JSON or streams
+    if (data.watts || data.heartrate || data.velocity_smooth) {
+      // Streams format
+      const len = (data.watts || data.heartrate || data.velocity_smooth).data.length;
+      const points = [];
+      for (let i = 0; i < len; i++) {
+        points.push({
+          power: data.watts?.data[i] || 0,
+          hr: data.heartrate?.data[i] || 0,
+          speed: data.velocity_smooth ? (data.velocity_smooth.data[i] * 2.237) : 0,
+          ele: data.altitude?.data[i] || 0,
+          lat: data.latlng?.data[i]?.[0] || 0,
+          lon: data.latlng?.data[i]?.[1] || 0,
+        });
+      }
+      processRide(points, filename);
+    } else {
+      toast('JSON format not recognized. Try GPX export from Strava.');
+    }
+  } catch(e) { toast('Could not parse JSON file'); }
+}
+
+// ── PROCESS RIDE ──────────────────────────────────────────────────────────
+function processRide(points, filename) {
+  if (points.length < 5) { toast('Not enough data points in file'); return; }
+
+  // Filter out zero/invalid
+  const valid = points.filter(p => p.time || p.hr || p.power || p.speed);
+
+  // Calculate metrics
+  const powers = valid.map(p => p.power || 0).filter(p => p > 0);
+  const hrs = valid.map(p => p.hr || 0).filter(h => h > 0);
+  const speeds = valid.map(p => p.speed || 0).filter(s => s > 0);
+
+  // Distance from coords if available
+  let distMiles = 0;
+  for (let i = 1; i < valid.length; i++) {
+    if (valid[i].lat && valid[i-1].lat) {
+      distMiles += haversine(valid[i-1].lat, valid[i-1].lon, valid[i].lat, valid[i].lon);
+    }
+  }
+  // Fallback: estimate from speed
+  if (distMiles < 0.1 && speeds.length > 0) {
+    distMiles = (speeds.reduce((a,b)=>a+b,0) / speeds.length) * (valid.length / 3600);
+  }
+
+  // Duration
+  let durationSec = 0;
+  if (valid[0]?.time && valid[valid.length-1]?.time) {
+    durationSec = (valid[valid.length-1].time - valid[0].time) / 1000;
+  } else {
+    durationSec = valid.length; // assume 1 sec per point
+  }
+
+  const avgPower = powers.length ? Math.round(powers.reduce((a,b)=>a+b,0)/powers.length) : null;
+  const maxPower = powers.length ? Math.max(...powers) : null;
+  const avgHR = hrs.length ? Math.round(hrs.reduce((a,b)=>a+b,0)/hrs.length) : null;
+  const maxHR = hrs.length ? Math.max(...hrs) : null;
+  const avgSpeed = speeds.length ? (speeds.reduce((a,b)=>a+b,0)/speeds.length) : null;
+
+  // NP (Normalized Power) — 30sec rolling avg^4
+  let np = null;
+  if (powers.length > 30) {
+    const window = 30;
+    const rolling = [];
+    for (let i = window; i < powers.length; i++) {
+      const slice = powers.slice(i-window, i);
+      rolling.push(slice.reduce((a,b)=>a+b,0)/window);
+    }
+    const fourth = rolling.map(p => Math.pow(p,4));
+    np = Math.round(Math.pow(fourth.reduce((a,b)=>a+b,0)/fourth.length, 0.25));
+  }
+
+  // IF (Intensity Factor)
+  const IF = np && ftp ? (np / ftp).toFixed(2) : null;
+
+  // TSS
+  const tss = np && ftp && IF ? Math.round((durationSec * np * parseFloat(IF)) / (ftp * 3600) * 100) : null;
+
+  // Zone time distribution
+  const zones = calcZones(powers, ftp);
+
+  // Detect laps (simple: split into equal segments of ~PP loop distance ~3.35mi)
+  const laps = detectLaps(valid, distMiles);
+
+  const ride = {
+    id: Date.now(),
+    filename,
+    date: valid[0]?.time ? valid[0].time.toISOString() : new Date().toISOString(),
+    points: valid,
+    metrics: { avgPower, maxPower, np, IF, tss, avgHR, maxHR, avgSpeed, distMiles: parseFloat(distMiles.toFixed(2)), durationSec, zones },
+    laps,
+  };
+
+  currentRide = ride;
+
+  // Save to storage (keep last 50 rides, strip raw points for storage)
+  const rideForStorage = { ...ride, points: [] }; // don't store all points
+  // Store summary only
+  const existing = rides.findIndex(r => r.filename === filename);
+  if (existing >= 0) rides[existing] = rideForStorage;
+  else rides.push(rideForStorage);
+  if (rides.length > 50) rides = rides.slice(-50);
+  localStorage.setItem('rides', JSON.stringify(rides));
+
+  renderAnalysis(ride);
+  renderSegments(ride);
+  renderProgress();
+  renderUploadedList();
+
+  toast('Loaded: ' + filename);
+  // Switch to analysis
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-analysis').classList.add('active');
+  document.querySelectorAll('nav button')[1].classList.add('active');
+}
+
+// ── HAVERSINE ─────────────────────────────────────────────────────────────
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 3958.8; // miles
+  const dLat = (lat2-lat1) * Math.PI/180;
+  const dLon = (lon2-lon1) * Math.PI/180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// ── ZONE CALC ─────────────────────────────────────────────────────────────
+function calcZones(powers, ftp) {
+  const zones = [0,0,0,0,0,0];
+  powers.forEach(p => {
+    const pct = p / ftp;
+    if (pct < 0.56) zones[0]++;
+    else if (pct < 0.76) zones[1]++;
+    else if (pct < 0.91) zones[2]++;
+    else if (pct < 1.06) zones[3]++;
+    else if (pct < 1.21) zones[4]++;
+    else zones[5]++;
+  });
+  return zones;
+}
+
+// ── LAP DETECTION ─────────────────────────────────────────────────────────
+function detectLaps(points, totalDist) {
+  // Detect laps by looking for return to start GPS coords, or split by known PP loop ~3.35mi
+  const LAP_DIST = 3.35; // PP loop miles
+  const laps = [];
+
+  if (totalDist < 1) return laps;
+
+  const numLaps = Math.round(totalDist / LAP_DIST);
+  if (numLaps < 1) return laps;
+
+  const chunkSize = Math.floor(points.length / numLaps);
+  for (let i = 0; i < numLaps; i++) {
+    const chunk = points.slice(i * chunkSize, (i+1) * chunkSize);
+    const powers = chunk.map(p => p.power||0).filter(p=>p>0);
+    const hrs = chunk.map(p => p.hr||0).filter(h=>h>0);
+    const speeds = chunk.map(p => p.speed||0).filter(s=>s>0);
+
+    let lapDist = 0;
+    for (let j = 1; j < chunk.length; j++) {
+      if (chunk[j].lat && chunk[j-1].lat) lapDist += haversine(chunk[j-1].lat, chunk[j-1].lon, chunk[j].lat, chunk[j].lon);
+    }
+    if (lapDist < 0.1 && speeds.length) lapDist = (speeds.reduce((a,b)=>a+b,0)/speeds.length) * (chunk.length/3600);
+
+    let durSec = 0;
+    if (chunk[0]?.time && chunk[chunk.length-1]?.time) durSec = (chunk[chunk.length-1].time - chunk[0].time)/1000;
+    else durSec = chunk.length;
+
+    laps.push({
+      num: i+1,
+      avgPower: powers.length ? Math.round(powers.reduce((a,b)=>a+b,0)/powers.length) : null,
+      maxPower: powers.length ? Math.max(...powers) : null,
+      avgHR: hrs.length ? Math.round(hrs.reduce((a,b)=>a+b,0)/hrs.length) : null,
+      avgSpeed: speeds.length ? parseFloat((speeds.reduce((a,b)=>a+b,0)/speeds.length).toFixed(1)) : null,
+      dist: parseFloat(lapDist.toFixed(2)),
+      durSec: Math.round(durSec),
+    });
+  }
+
+  // Try to find the hill segment within first lap (PP hill is ~0.48mi ~2:35 at ~5% grade)
+  // Mark the best hill candidate
+  return laps;
+}
+
+// ── RENDER ANALYSIS ───────────────────────────────────────────────────────
+function renderAnalysis(ride) {
+  const { metrics, points, filename } = ride;
+  document.getElementById('analysisEmpty').style.display = 'none';
+  document.getElementById('analysisContent').style.display = 'block';
+
+  const fmt = (v, u='') => v !== null && v !== undefined ? v + u : '—';
+  const fmtTime = s => {
+    if (!s) return '—';
+    const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = Math.floor(s%60);
+    return h > 0 ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}` : `${m}:${String(sec).padStart(2,'0')}`;
+  };
+
+  const statDefs = [
+    { label: 'Distance', value: fmt(metrics.distMiles,'mi'), sub: '', color: 'var(--accent)' },
+    { label: 'Duration', value: fmtTime(metrics.durationSec), sub: '', color: 'var(--accent2)' },
+    { label: 'Avg Power', value: fmt(metrics.avgPower,'w'), sub: metrics.avgPower ? Math.round(metrics.avgPower/ftp*100)+'% FTP' : '', color: 'var(--accent)' },
+    { label: 'Norm Power', value: fmt(metrics.np,'w'), sub: metrics.IF ? 'IF: '+metrics.IF : '', color: 'var(--accent3)' },
+    { label: 'Peak Power', value: fmt(metrics.maxPower,'w'), sub: metrics.maxPower ? Math.round(metrics.maxPower/ftp*100)+'% FTP' : '', color: 'var(--accent)' },
+    { label: 'TSS', value: fmt(metrics.tss), sub: 'Training stress', color: 'var(--accent3)' },
+    { label: 'Avg HR', value: fmt(metrics.avgHR,'bpm'), sub: '', color: 'var(--accent2)' },
+    { label: 'Max HR', value: fmt(metrics.maxHR,'bpm'), sub: '', color: 'var(--danger)' },
+    { label: 'Avg Speed', value: metrics.avgSpeed ? parseFloat(metrics.avgSpeed).toFixed(1)+'mph' : '—', sub: '', color: 'var(--accent2)' },
+  ];
+
+  const grid = document.getElementById('statsGrid');
+  grid.innerHTML = statDefs.map(s => `
+    <div class="stat-card" style="--accent-color:${s.color}">
+      <div class="stat-label">${s.label}</div>
+      <div class="stat-value">${s.value}</div>
+      ${s.sub ? `<div class="stat-sub">${s.sub}</div>` : ''}
+    </div>
+  `).join('');
+
+  // Downsample points for charts
+  const ds = downsample(points, 300);
+  const labels = ds.map((p,i) => {
+    if (p.time) { const m = Math.floor((p.time - points[0].time)/60000); return m+'m'; }
+    return Math.round(i * metrics.durationSec / ds.length / 60) + 'm';
+  });
+
+  destroyChart('powerChart');
+  destroyChart('hrChart');
+  destroyChart('speedChart');
+  destroyChart('scatterChart');
+
+  const chartDefaults = {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1e2028', titleColor: '#e8eaf0', bodyColor: '#6b7080', borderColor: '#2a2d35', borderWidth: 1 } },
+    scales: {
+      x: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 }, maxTicksLimit: 8 }, grid: { color: '#1e2028' } },
+      y: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } }
+    }
+  };
+
+  if (ds.some(p => p.power > 0)) {
+    charts.powerChart = new Chart(document.getElementById('powerChart'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          data: ds.map(p => p.power||0),
+          borderColor: '#c8f060', borderWidth: 1.5,
+          backgroundColor: 'rgba(200,240,96,0.08)',
+          fill: true, pointRadius: 0, tension: 0.3
+        }, {
+          data: Array(labels.length).fill(ftp),
+          borderColor: 'rgba(200,240,96,0.3)', borderWidth: 1,
+          borderDash: [4,4], pointRadius: 0, fill: false,
+          label: 'FTP'
+        }]
+      },
+      options: { ...chartDefaults }
+    });
+  }
+
+  if (ds.some(p => p.hr > 0)) {
+    charts.hrChart = new Chart(document.getElementById('hrChart'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          data: ds.map(p => p.hr||null),
+          borderColor: '#f06060', borderWidth: 1.5,
+          backgroundColor: 'rgba(240,96,96,0.08)',
+          fill: true, pointRadius: 0, tension: 0.4, spanGaps: true
+        }]
+      },
+      options: { ...chartDefaults }
+    });
+  }
+
+  if (ds.some(p => p.speed > 0)) {
+    charts.speedChart = new Chart(document.getElementById('speedChart'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          data: ds.map(p => p.speed ? parseFloat(p.speed.toFixed(1)) : null),
+          borderColor: '#60c8f0', borderWidth: 1.5,
+          backgroundColor: 'rgba(96,200,240,0.08)',
+          fill: true, pointRadius: 0, tension: 0.3, spanGaps: true
+        }]
+      },
+      options: { ...chartDefaults }
+    });
+  }
+
+  // Scatter: power vs HR
+  if (ds.some(p => p.power > 0 && p.hr > 0)) {
+    const scatter = ds.filter(p => p.power > 20 && p.hr > 60).map(p => ({ x: p.power, y: p.hr }));
+    charts.scatterChart = new Chart(document.getElementById('scatterChart'), {
+      type: 'scatter',
+      data: {
+        datasets: [{
+          data: scatter,
+          backgroundColor: 'rgba(200,240,96,0.4)',
+          pointRadius: 3, pointHoverRadius: 5
+        }]
+      },
+      options: {
+        ...chartDefaults,
+        scales: {
+          x: { title: { display: true, text: 'Power (w)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } },
+          y: { title: { display: true, text: 'Heart Rate (bpm)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } }
+        }
+      }
+    });
+  }
+
+  // Zone bars
+  const zoneColors = ['#6b7080','#60c8f0','#c8f060','#f0a060','#f06060','#ff3030'];
+  const zoneNames = ['Z1 Recovery','Z2 Endurance','Z3 Tempo','Z4 Threshold','Z5 VO2max','Z6 Anaerobic'];
+  const total = metrics.zones.reduce((a,b)=>a+b,0) || 1;
+  document.getElementById('zoneBars').innerHTML = metrics.zones.map((z,i) => {
+    const pct = Math.round(z/total*100);
+    return `
+      <div class="zone-bar-row">
+        <div class="zone-bar-label" style="color:${zoneColors[i]};font-size:9px;">${zoneNames[i].split(' ')[0]}</div>
+        <div class="zone-bar-track">
+          <div class="zone-bar-fill" style="width:${pct}%;background:${zoneColors[i]}"></div>
+        </div>
+        <div class="zone-bar-pct">${pct}%</div>
+      </div>
+    `;
+  }).join('');
+}
+
+// ── RENDER SEGMENTS ───────────────────────────────────────────────────────
+function renderSegments(ride) {
+  if (!ride) return;
+  document.getElementById('segmentsEmpty').style.display = 'none';
+  document.getElementById('segmentsContent').style.display = 'block';
+
+  const { laps, metrics } = ride;
+  const fmtTime = s => { const m=Math.floor(s/60),sec=Math.floor(s%60); return `${m}:${String(sec).padStart(2,'0')}`; };
+
+  // Hill benchmark cards — stored benchmarks
+  const storedBenchmarks = JSON.parse(localStorage.getItem('hillBenchmarks') || '[]');
+
+  // Check if this ride has a hill-like segment (best lap ~2:35 equivalent)
+  const benchTargets = [
+    { label: 'Baseline — Apr 25', target: 155, targetSpeed: 11.2, targetHR: 144, targetWatts: 168 },
+    { label: 'Test 2 — May 27',   target: 140, targetSpeed: 12.0, targetHR: 142, targetWatts: 178 },
+    { label: 'Test 3 — Jun 12',   target: 130, targetSpeed: 13.0, targetHR: 140, targetWatts: 188 },
+    { label: 'Final — Jul 5',     target: 120, targetSpeed: 13.8, targetHR: 138, targetWatts: 198 },
+  ];
+
+  document.getElementById('benchmarkRow').innerHTML = benchTargets.map((b, i) => {
+    const stored = storedBenchmarks[i];
+    const achieved = stored && stored.time <= b.target;
+    return `
+      <div class="bench-card ${stored ? 'achieved' : 'pending'}">
+        <div class="date">${b.label}</div>
+        <div class="time">${stored ? fmtTime(stored.time) : 'sub ' + fmtTime(b.target)}</div>
+        <div class="meta">${stored ? stored.speed+'mph · '+stored.hr+'bpm' : '>'+b.targetSpeed+'mph · <'+b.targetHR+'bpm'}</div>
+        <div class="target">target: ${fmtTime(b.target)} · ${b.targetWatts}w</div>
+      </div>
+    `;
+  }).join('');
+
+  // Lap table
+  if (!laps.length) {
+    document.getElementById('segTableBody').innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:24px;">No lap data detected — try a file with lap markers</td></tr>';
+    return;
+  }
+
+  const bestLapPower = laps.reduce((best, l) => l.avgPower > (best?.avgPower||0) ? l : best, null);
+  const bestLapTime = laps.reduce((best, l) => l.durSec < (best?.durSec||Infinity) ? l : best, null);
+
+  document.getElementById('segTableBody').innerHTML = laps.map((lap, i) => {
+    const pctFTP = lap.avgPower ? Math.round(lap.avgPower/ftp*100) : null;
+    const isBestPower = lap === bestLapPower;
+    const isBestTime = lap === bestLapTime;
+    const zone = lap.avgPower ? getZoneName(lap.avgPower, ftp) : '—';
+    return `
+      <tr>
+        <td><span class="seg-name">Lap ${lap.num}</span></td>
+        <td class="${isBestTime ? 'seg-best' : ''}">${fmtTime(lap.durSec)}</td>
+        <td class="${isBestPower ? 'seg-best' : ''}">${lap.avgPower ? lap.avgPower+'w' : '—'}</td>
+        <td>${pctFTP ? '<span class="pill">'+pctFTP+'%</span>' : '—'}</td>
+        <td>${lap.avgHR ? lap.avgHR+'bpm' : '—'}</td>
+        <td>${lap.avgSpeed ? lap.avgSpeed+'mph' : '—'}</td>
+        <td>${lap.maxPower ? lap.maxPower+'w' : '—'}</td>
+        <td><span class="pill ${pctFTP > 90 ? 'orange' : pctFTP > 75 ? 'blue' : ''}">${zone}</span></td>
+      </tr>
+    `;
+  }).join('');
+
+  // Lap chart
+  destroyChart('lapChart');
+  if (laps.length && laps.some(l => l.avgPower)) {
+    charts.lapChart = new Chart(document.getElementById('lapChart'), {
+      type: 'bar',
+      data: {
+        labels: laps.map(l => 'Lap ' + l.num),
+        datasets: [{
+          label: 'Avg Power (w)',
+          data: laps.map(l => l.avgPower || 0),
+          backgroundColor: laps.map(l => l === bestLapPower ? '#c8f060' : 'rgba(200,240,96,0.3)'),
+          borderRadius: 4,
+        }, {
+          label: 'Avg HR (bpm)',
+          data: laps.map(l => l.avgHR || 0),
+          backgroundColor: 'rgba(240,96,96,0.4)',
+          borderRadius: 4,
+          yAxisID: 'y1',
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }, tooltip: { backgroundColor: '#1e2028', titleColor: '#e8eaf0', bodyColor: '#6b7080', borderColor: '#2a2d35', borderWidth: 1 } },
+        scales: {
+          x: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } },
+          y: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } },
+          y1: { position: 'right', ticks: { color: '#f06060', font: { family: 'DM Mono', size: 10 } }, grid: { display: false } }
+        }
+      }
+    });
+  }
+}
+
+// ── RENDER PROGRESS ───────────────────────────────────────────────────────
+function renderProgress() {
+  const allRides = rides.filter(r => r.metrics);
+  if (allRides.length < 1) {
+    document.getElementById('progressEmpty').style.display = 'block';
+    document.getElementById('progressContent').style.display = 'none';
+    return;
+  }
+  document.getElementById('progressEmpty').style.display = 'none';
+  document.getElementById('progressContent').style.display = 'block';
+
+  const sorted = [...allRides].sort((a,b) => new Date(a.date) - new Date(b.date));
+  const labels = sorted.map(r => new Date(r.date).toLocaleDateString('en-US',{month:'short',day:'numeric'}));
+
+  const progressChartOpts = {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1e2028', titleColor: '#e8eaf0', bodyColor: '#6b7080', borderColor: '#2a2d35', borderWidth: 1 } },
+    scales: {
+      x: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } },
+      y: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } }
+    }
+  };
+
+  ['progressPowerChart','progressHRChart','progressHillChart','progressDistChart'].forEach(destroyChart);
+
+  charts.progressPowerChart = new Chart(document.getElementById('progressPowerChart'), {
+    type: 'line',
+    data: { labels, datasets: [{ data: sorted.map(r => r.metrics.avgPower), borderColor: '#c8f060', backgroundColor: 'rgba(200,240,96,0.1)', fill: true, tension: 0.3, pointRadius: 4, pointBackgroundColor: '#c8f060' }] },
+    options: progressChartOpts
+  });
+
+  charts.progressHRChart = new Chart(document.getElementById('progressHRChart'), {
+    type: 'line',
+    data: { labels, datasets: [{ data: sorted.map(r => r.metrics.avgHR), borderColor: '#f06060', backgroundColor: 'rgba(240,96,96,0.1)', fill: true, tension: 0.3, pointRadius: 4, pointBackgroundColor: '#f06060' }] },
+    options: progressChartOpts
+  });
+
+  charts.progressDistChart = new Chart(document.getElementById('progressDistChart'), {
+    type: 'bar',
+    data: { labels, datasets: [{ data: sorted.map(r => r.metrics.distMiles), backgroundColor: 'rgba(96,200,240,0.5)', borderRadius: 4 }] },
+    options: progressChartOpts
+  });
+
+  // Hill chart — placeholder with targets
+  const hillTargets = [{ x: 'Apr 25', y: 155 }, { x: 'May 27', y: 140 }, { x: 'Jun 12', y: 130 }, { x: 'Jul 5', y: 120 }];
+  charts.progressHillChart = new Chart(document.getElementById('progressHillChart'), {
+    type: 'line',
+    data: {
+      labels: hillTargets.map(h=>h.x),
+      datasets: [{
+        label: 'Target',
+        data: hillTargets.map(h=>h.y),
+        borderColor: 'rgba(200,240,96,0.3)', borderDash: [4,4],
+        pointRadius: 4, fill: false, tension: 0
+      }]
+    },
+    options: { ...progressChartOpts, scales: { ...progressChartOpts.scales, y: { ...progressChartOpts.scales.y, reverse: true, title: { display: true, text: 'seconds', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } } } }
+  });
+
+  // All rides list
+  const fmtTime = s => { const h=Math.floor(s/3600),m=Math.floor((s%3600)/60); return h>0?`${h}h ${m}m`:`${m}m`; };
+  document.getElementById('allRidesList').innerHTML = sorted.reverse().map(r => `
+    <div class="ride-row">
+      <div class="ride-date">${new Date(r.date).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})}</div>
+      <div class="ride-name">${r.filename.replace(/\.(fit|gpx|json)$/i,'')}</div>
+      <div class="ride-stat">${r.metrics.distMiles||'—'}<span>miles</span></div>
+      <div class="ride-stat">${fmtTime(r.metrics.durationSec)}<span>time</span></div>
+      <div class="ride-stat">${r.metrics.avgPower||'—'}<span>avg w</span></div>
+      <div class="ride-stat">${r.metrics.avgHR||'—'}<span>avg bpm</span></div>
+      <div class="ride-stat">${r.metrics.tss||'—'}<span>TSS</span></div>
+      <button class="del-btn" onclick="deleteRide(${r.id})" title="Remove">×</button>
+    </div>
+  `).join('') || '<div style="color:var(--muted);text-align:center;padding:24px;font-family:var(--mono);font-size:12px;">No rides yet</div>';
+}
+
+function deleteRide(id) {
+  rides = rides.filter(r => r.id !== id);
+  localStorage.setItem('rides', JSON.stringify(rides));
+  renderProgress();
+  renderUploadedList();
+  toast('Ride removed');
+}
+
+function renderUploadedList() {
+  const recent = [...rides].sort((a,b) => new Date(b.date)-new Date(a.date)).slice(0,5);
+  const fmtTime = s => { const h=Math.floor(s/3600),m=Math.floor((s%3600)/60); return h>0?`${h}h ${m}m`:`${m}m`; };
+  document.getElementById('uploadedList').innerHTML = recent.length ? `
+    <div class="section-title">Recent uploads</div>
+    ${recent.map(r => `
+      <div class="ride-row" onclick="loadStoredRide(${r.id})" style="cursor:pointer;">
+        <div class="ride-date">${new Date(r.date).toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div>
+        <div class="ride-name">${r.filename}</div>
+        <div class="ride-stat">${r.metrics?.distMiles||'—'}<span>mi</span></div>
+        <div class="ride-stat">${r.metrics?.durationSec ? fmtTime(r.metrics.durationSec) : '—'}<span>time</span></div>
+        <div class="ride-stat">${r.metrics?.avgPower||'—'}<span>avg w</span></div>
+        <div class="ride-stat">${r.metrics?.avgHR||'—'}<span>bpm</span></div>
+        <div class="ride-stat">${r.metrics?.tss||'—'}<span>TSS</span></div>
+        <button class="del-btn" onclick="event.stopPropagation();deleteRide(${r.id})" title="Remove">×</button>
+      </div>
+    `).join('')}
+  ` : '';
+}
+
+function loadStoredRide(id) {
+  toast('Raw data not stored — re-upload the file to view analysis');
+}
+
+// ── HELPERS ───────────────────────────────────────────────────────────────
+function downsample(arr, n) {
+  if (arr.length <= n) return arr;
+  const step = arr.length / n;
+  return Array.from({length: n}, (_,i) => arr[Math.floor(i*step)]);
+}
+
+function destroyChart(id) {
+  if (charts[id]) { charts[id].destroy(); delete charts[id]; }
+}
+
+function getZoneName(power, ftp) {
+  const pct = power / ftp;
+  if (pct < 0.56) return 'Z1';
+  if (pct < 0.76) return 'Z2';
+  if (pct < 0.91) return 'Z3';
+  if (pct < 1.06) return 'Z4';
+  if (pct < 1.21) return 'Z5';
+  return 'Z6';
+}
+
+// Init
+renderUploadedList();
+renderProgress();
+</script>
+</body>
+</html>
