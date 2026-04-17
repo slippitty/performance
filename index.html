@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ride Analysis — Iceland Training</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/fit-file-parser@1.9.0/dist/fit-file-parser.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@300;400;500&display=swap');
 
@@ -614,54 +613,141 @@ function parseGPX(text, filename) {
   processRide(points, filename, []);
 }
 
-// ── FIT PARSER (using fit-file-parser library) ───────────────────────────
+// ── FIT PARSER — native, no dependencies ─────────────────────────────────
 function parseFIT(buffer, filename) {
   try {
-    const parser = new FitParser({
-      force: true,
-      speedUnit: 'mph',
-      lengthUnit: 'mi',
-      temperatureUnit: 'celsius',
-      elapsedRecordField: true,
-      mode: 'both',
-    });
+    const bytes = new Uint8Array(buffer);
+    // Validate .FIT header
+    if (bytes[8] !== 0x2E || bytes[9] !== 0x46 || bytes[10] !== 0x49 || bytes[11] !== 0x54) {
+      toast('Not a valid FIT file'); return;
+    }
+    const headerLen = bytes[0];
+    const FIT_EPOCH = 631065600000; // ms — FIT epoch is Dec 31 1989
 
-    parser.parse(buffer, function(error, data) {
-      if (error) {
-        toast('Could not parse FIT file: ' + error);
-        document.getElementById('loadingMsg').classList.remove('show');
-        return;
+    const defs = {};
+    const points = [];
+    const lapData = [];
+    let i = headerLen;
+    const end = bytes.length - 2;
+
+    function r8(p)  { return bytes[p]; }
+    function r16(p, be) { return be ? (bytes[p]<<8)|bytes[p+1] : bytes[p]|(bytes[p+1]<<8); }
+    function r32(p, be) {
+      let v = be
+        ? ((bytes[p]<<24)|(bytes[p+1]<<16)|(bytes[p+2]<<8)|bytes[p+3])
+        : (bytes[p]|(bytes[p+1]<<8)|(bytes[p+2]<<16)|(bytes[p+3]<<24));
+      return v >>> 0; // unsigned
+    }
+    function r32s(p, be) {
+      let v = r32(p, be);
+      return v >= 0x80000000 ? v - 0x100000000 : v;
+    }
+    function rVal(p, size, baseType, be) {
+      if (size === 1) return r8(p);
+      if (size === 2) return r16(p, be);
+      if (size === 4) {
+        // sint32 baseType = 0x85
+        return (baseType === 0x85) ? r32s(p, be) : r32(p, be);
+      }
+      // larger fields: read as array of bytes (for strings etc), just skip
+      return null;
+    }
+
+    while (i < end) {
+      const hdr = bytes[i];
+      // compressed timestamp record
+      if (hdr & 0x80) {
+        const local = (hdr >> 5) & 0x03;
+        i++;
+        if (!defs[local]) continue;
+        const [gn, fields, be] = defs[local];
+        const rec = {};
+        for (const [fn, fs, ft] of fields) {
+          if (i + fs > end) break;
+          rec[fn] = rVal(i, fs, ft, be);
+          i += fs;
+        }
+        if (gn === 20) storeRecord(rec, FIT_EPOCH, points);
+        continue;
       }
 
-      const records = data.records || [];
-      if (!records.length) {
-        toast('No data records found in FIT file');
-        document.getElementById('loadingMsg').classList.remove('show');
-        return;
+      const isDef = !!(hdr & 0x40);
+      const local = hdr & 0x0F;
+      i++;
+
+      if (isDef) {
+        i++; // reserved
+        const be = bytes[i++] === 1;
+        const gn = r16(i, be); i += 2;
+        const nf = bytes[i++];
+        const fields = [];
+        for (let f = 0; f < nf; f++) {
+          const fn = bytes[i], fs = bytes[i+1], ft = bytes[i+2]; i += 3;
+          fields.push([fn, fs, ft]);
+        }
+        defs[local] = [gn, fields, be];
+      } else {
+        if (!defs[local]) { i++; continue; }
+        const [gn, fields, be] = defs[local];
+        const rec = {};
+        for (const [fn, fs, ft] of fields) {
+          if (i + fs > end) { i += fs; continue; }
+          rec[fn] = rVal(i, fs, ft, be);
+          i += fs;
+        }
+        if (gn === 20) storeRecord(rec, FIT_EPOCH, points);   // record
+        if (gn === 19) storeLap(rec, FIT_EPOCH, lapData);      // lap
       }
+    }
 
-      const points = records.map(r => ({
-        time: r.timestamp ? new Date(r.timestamp) : null,
-        lat: r.position_lat || null,
-        lon: r.position_long || null,
-        power: r.power || 0,
-        hr: r.heart_rate || 0,
-        speed: r.speed || 0,  // already in mph from parser config
-        ele: r.altitude || r.enhanced_altitude || 0,
-        distance: r.distance || 0,  // in miles from parser config
-        cadence: r.cadence || 0,
-      }));
-
-      // Also extract laps if available
-      const fitLaps = data.laps || [];
-
-      processRide(points, filename, fitLaps);
-      document.getElementById('loadingMsg').classList.remove('show');
-    });
+    if (points.length < 5) {
+      toast('FIT file parsed but no data records found');
+      return;
+    }
+    processRide(points, filename, lapData);
   } catch(e) {
-    toast('Error reading FIT file: ' + e.message);
-    document.getElementById('loadingMsg').classList.remove('show');
+    console.error('FIT parse error:', e);
+    toast('FIT parse error: ' + e.message);
   }
+}
+
+function storeRecord(rec, FIT_EPOCH, points) {
+  // field defs for global msg 20 (record):
+  // 253=timestamp, 0=lat(semicircles), 1=lon(semicircles), 2=altitude(scaled)
+  // 3=heart_rate, 4=cadence, 5=distance(m*100), 6=speed(m/s*1000), 7=power
+  // 73=enhanced_speed, 78=enhanced_altitude
+  const INVALID1 = 0xFF, INVALID2 = 0xFFFF, INVALID4 = 0xFFFFFFFF;
+  const INVALID_SINT32 = 0x7FFFFFFF;
+
+  const ts   = rec[253] !== undefined && rec[253] !== INVALID4 ? new Date(rec[253] * 1000 + FIT_EPOCH) : null;
+  const lat  = rec[0]   !== undefined && rec[0] !== INVALID_SINT32 && rec[0] !== -2147483648 ? rec[0] * (180 / 2147483648) : null;
+  const lon  = rec[1]   !== undefined && rec[1] !== INVALID_SINT32 && rec[1] !== -2147483648 ? rec[1] * (180 / 2147483648) : null;
+  const alt  = rec[78]  !== undefined && rec[78] !== INVALID2 ? rec[78] / 5 - 500
+             : rec[2]   !== undefined && rec[2]  !== INVALID2 ? rec[2] / 5 - 500 : 0;
+  const hr   = rec[3]   !== undefined && rec[3]  !== INVALID1 ? rec[3]  : 0;
+  const cad  = rec[4]   !== undefined && rec[4]  !== INVALID1 ? rec[4]  : 0;
+  const dist = rec[5]   !== undefined && rec[5]  !== INVALID4 ? rec[5] / 100 : 0;  // meters
+  const spd  = rec[73]  !== undefined && rec[73] !== INVALID2 ? rec[73] / 1000 * 2.23694
+             : rec[6]   !== undefined && rec[6]  !== INVALID2 ? rec[6]  / 1000 * 2.23694 : 0; // mph
+  const pwr  = rec[7]   !== undefined && rec[7]  !== INVALID2 ? rec[7]  : 0;
+
+  points.push({ time: ts, lat, lon, ele: alt, hr, cadence: cad,
+                distance: dist * 0.000621371, speed: spd, power: pwr });
+}
+
+function storeLap(rec, FIT_EPOCH, lapData) {
+  // global msg 19 (lap): 253=ts, 2=avg_power, 7=max_power, 9=avg_hr, 15=avg_speed
+  // 21=total_elapsed_time(ms*1000), 12=total_distance(m*100), 11=normalized_power
+  const elapsed = rec[7] !== undefined ? rec[7] / 1000 : null;   // total_elapsed_time
+  const dist    = rec[9] !== undefined ? rec[9] / 100 * 0.000621371 : null; // total_distance miles
+  const avgPwr  = rec[19] !== undefined && rec[19] !== 0xFFFF ? rec[19] : null;
+  const maxPwr  = rec[20] !== undefined && rec[20] !== 0xFFFF ? rec[20] : null;
+  const avgHR   = rec[15] !== undefined && rec[15] !== 0xFF   ? rec[15] : null;
+  const maxHR   = rec[16] !== undefined && rec[16] !== 0xFF   ? rec[16] : null;
+  const avgSpd  = rec[13] !== undefined && rec[13] !== 0xFFFF ? rec[13] / 1000 * 2.23694 : null;
+  const np      = rec[33] !== undefined && rec[33] !== 0xFFFF ? rec[33] : null;
+  lapData.push({ durSec: elapsed, dist, avgPower: avgPwr, maxPower: maxPwr,
+                 avgHR, maxHR, avgSpeed: avgSpd ? parseFloat(avgSpd.toFixed(1)) : null, np });
 }
 
 // ── JSON PARSER (Strava API format) ──────────────────────────────────────
@@ -702,11 +788,11 @@ function processRide(points, filename, fitLaps) {
   const hrs = valid.map(p => p.hr || 0).filter(h => h > 0);
   const speeds = valid.map(p => p.speed || 0).filter(s => s > 0);
 
-  // Distance: use .distance field if available (from FIT), else calculate from coords
+  // Distance: use .distance field if available (meters→miles already done), else haversine
   let distMiles = 0;
   const lastDist = valid[valid.length-1]?.distance;
   if (lastDist && lastDist > 0.1) {
-    distMiles = lastDist; // already in miles from FIT parser
+    distMiles = lastDist;
   } else {
     for (let i = 1; i < valid.length; i++) {
       if (valid[i].lat && valid[i-1].lat) {
@@ -714,7 +800,6 @@ function processRide(points, filename, fitLaps) {
       }
     }
   }
-  // Fallback: estimate from speed
   if (distMiles < 0.1 && speeds.length > 0) {
     distMiles = (speeds.reduce((a,b)=>a+b,0) / speeds.length) * (valid.length / 3600);
   }
@@ -756,21 +841,9 @@ function processRide(points, filename, fitLaps) {
   const zones = calcZones(powers, ftp);
 
   // Detect laps (simple: split into equal segments of ~PP loop distance ~3.35mi)
-  // Use FIT laps if available, otherwise detect from distance
   let laps;
   if (fitLaps && fitLaps.length > 1) {
-    laps = fitLaps.map((lap, i) => ({
-      num: i + 1,
-      avgPower: lap.avg_power ? Math.round(lap.avg_power) : null,
-      maxPower: lap.max_power || null,
-      avgHR: lap.avg_heart_rate ? Math.round(lap.avg_heart_rate) : null,
-      maxHR: lap.max_heart_rate || null,
-      avgSpeed: lap.avg_speed ? parseFloat(lap.avg_speed.toFixed(1)) : null,
-      dist: lap.total_distance ? parseFloat(lap.total_distance.toFixed(2)) : null,
-      durSec: lap.total_elapsed_time ? Math.round(lap.total_elapsed_time) : null,
-      np: lap.normalized_power || null,
-      tss: null,
-    }));
+    laps = fitLaps.map((lap, idx) => ({ num: idx+1, ...lap }));
   } else {
     laps = detectLaps(valid, distMiles);
   }
