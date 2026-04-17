@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ride Analysis — Iceland Training</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fit-file-parser@1.9.0/dist/fit-file-parser.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@300;400;500&display=swap');
 
@@ -610,99 +611,57 @@ function parseGPX(text, filename) {
     points.push({ lat, lon, ele, time: time ? new Date(time) : null, hr, power, cad });
   });
 
-  processRide(points, filename);
+  processRide(points, filename, []);
 }
 
-// ── FIT PARSER (simplified binary reader) ────────────────────────────────
+// ── FIT PARSER (using fit-file-parser library) ───────────────────────────
 function parseFIT(buffer, filename) {
-  // FIT is complex binary; we extract what we can with a best-effort approach
-  // For full FIT support the user can use Garmin's export to GPX instead
-  // Here we attempt basic record extraction
   try {
-    const bytes = new Uint8Array(buffer);
-    const points = extractFITRecords(bytes);
-    if (points.length < 2) {
-      toast('FIT parsing limited — try exporting as GPX from Garmin Connect for best results');
-      // Still try to show what we have
-      if (points.length === 0) return;
-    }
-    processRide(points, filename);
+    const parser = new FitParser({
+      force: true,
+      speedUnit: 'mph',
+      lengthUnit: 'mi',
+      temperatureUnit: 'celsius',
+      elapsedRecordField: true,
+      mode: 'both',
+    });
+
+    parser.parse(buffer, function(error, data) {
+      if (error) {
+        toast('Could not parse FIT file: ' + error);
+        document.getElementById('loadingMsg').classList.remove('show');
+        return;
+      }
+
+      const records = data.records || [];
+      if (!records.length) {
+        toast('No data records found in FIT file');
+        document.getElementById('loadingMsg').classList.remove('show');
+        return;
+      }
+
+      const points = records.map(r => ({
+        time: r.timestamp ? new Date(r.timestamp) : null,
+        lat: r.position_lat || null,
+        lon: r.position_long || null,
+        power: r.power || 0,
+        hr: r.heart_rate || 0,
+        speed: r.speed || 0,  // already in mph from parser config
+        ele: r.altitude || r.enhanced_altitude || 0,
+        distance: r.distance || 0,  // in miles from parser config
+        cadence: r.cadence || 0,
+      }));
+
+      // Also extract laps if available
+      const fitLaps = data.laps || [];
+
+      processRide(points, filename, fitLaps);
+      document.getElementById('loadingMsg').classList.remove('show');
+    });
   } catch(e) {
-    toast('Could not parse FIT file — please export as GPX from Garmin Connect');
+    toast('Error reading FIT file: ' + e.message);
+    document.getElementById('loadingMsg').classList.remove('show');
   }
-}
-
-function extractFITRecords(bytes) {
-  // Simplified FIT extraction — reads known field offsets for common Garmin files
-  const records = [];
-  let i = 14; // skip FIT header
-  const len = bytes.length - 2; // skip CRC
-
-  const defMsgs = {};
-
-  while (i < len) {
-    const recordHeader = bytes[i];
-    if (recordHeader === undefined) break;
-
-    const isCompressed = (recordHeader & 0x80) !== 0;
-    if (isCompressed) { i++; continue; }
-
-    const isDefinition = (recordHeader & 0x40) !== 0;
-    const localMsgType = recordHeader & 0x0F;
-
-    if (isDefinition) {
-      i++; // skip reserved
-      i++; // skip architecture
-      const arch = bytes[i-1]; // 0=little, 1=big
-      const globalMsgNum = arch === 0
-        ? bytes[i] | (bytes[i+1] << 8)
-        : (bytes[i] << 8) | bytes[i+1];
-      i += 2;
-      const numFields = bytes[i++];
-      const fields = [];
-      for (let f = 0; f < numFields; f++) {
-        fields.push({ num: bytes[i], size: bytes[i+1], type: bytes[i+2] });
-        i += 3;
-      }
-      defMsgs[localMsgType] = { globalMsgNum, fields, arch };
-      continue;
-    }
-
-    // Data message
-    i++;
-    const def = defMsgs[localMsgType];
-    if (!def) continue;
-
-    const rec = {};
-    for (const field of def.fields) {
-      if (i + field.size > len) break;
-      let val = 0;
-      if (field.size === 1) val = bytes[i];
-      else if (field.size === 2) val = def.arch === 0 ? bytes[i] | (bytes[i+1]<<8) : (bytes[i]<<8)|bytes[i+1];
-      else if (field.size === 4) val = def.arch === 0
-        ? bytes[i] | (bytes[i+1]<<8) | (bytes[i+2]<<16) | (bytes[i+3]<<24)
-        : (bytes[i]<<24)|(bytes[i+1]<<16)|(bytes[i+2]<<8)|bytes[i+3];
-      i += field.size;
-
-      // global msg 20 = record; field nums: 0=lat,1=lon,2=alt,3=hr,4=cad,5=dist,6=speed,7=power
-      if (def.globalMsgNum === 20) {
-        if (field.num === 0 && val !== 0x7FFFFFFF) rec.lat = val * (180 / Math.pow(2, 31));
-        if (field.num === 1 && val !== 0x7FFFFFFF) rec.lon = val * (180 / Math.pow(2, 31));
-        if (field.num === 2 && val !== 0xFFFF) rec.ele = (val / 5) - 500;
-        if (field.num === 3 && val !== 0xFF) rec.hr = val;
-        if (field.num === 4 && val !== 0xFF) rec.cad = val;
-        if (field.num === 6 && val !== 0xFFFF) rec.speed = (val * 3.6) / 1000; // km/h
-        if (field.num === 7 && val !== 0xFFFF) rec.power = val;
-        if (field.num === 253) rec.timestamp = val; // seconds since FIT epoch (631065600)
-      }
-    }
-
-    if (def.globalMsgNum === 20 && (rec.hr || rec.power || rec.speed)) {
-      if (rec.timestamp) rec.time = new Date((rec.timestamp + 631065600) * 1000);
-      records.push(rec);
-    }
-  }
-  return records;
 }
 
 // ── JSON PARSER (Strava API format) ──────────────────────────────────────
@@ -732,7 +691,7 @@ function parseJSON(text, filename) {
 }
 
 // ── PROCESS RIDE ──────────────────────────────────────────────────────────
-function processRide(points, filename) {
+function processRide(points, filename, fitLaps) {
   if (points.length < 5) { toast('Not enough data points in file'); return; }
 
   // Filter out zero/invalid
@@ -743,11 +702,16 @@ function processRide(points, filename) {
   const hrs = valid.map(p => p.hr || 0).filter(h => h > 0);
   const speeds = valid.map(p => p.speed || 0).filter(s => s > 0);
 
-  // Distance from coords if available
+  // Distance: use .distance field if available (from FIT), else calculate from coords
   let distMiles = 0;
-  for (let i = 1; i < valid.length; i++) {
-    if (valid[i].lat && valid[i-1].lat) {
-      distMiles += haversine(valid[i-1].lat, valid[i-1].lon, valid[i].lat, valid[i].lon);
+  const lastDist = valid[valid.length-1]?.distance;
+  if (lastDist && lastDist > 0.1) {
+    distMiles = lastDist; // already in miles from FIT parser
+  } else {
+    for (let i = 1; i < valid.length; i++) {
+      if (valid[i].lat && valid[i-1].lat) {
+        distMiles += haversine(valid[i-1].lat, valid[i-1].lon, valid[i].lat, valid[i].lon);
+      }
     }
   }
   // Fallback: estimate from speed
@@ -792,7 +756,24 @@ function processRide(points, filename) {
   const zones = calcZones(powers, ftp);
 
   // Detect laps (simple: split into equal segments of ~PP loop distance ~3.35mi)
-  const laps = detectLaps(valid, distMiles);
+  // Use FIT laps if available, otherwise detect from distance
+  let laps;
+  if (fitLaps && fitLaps.length > 1) {
+    laps = fitLaps.map((lap, i) => ({
+      num: i + 1,
+      avgPower: lap.avg_power ? Math.round(lap.avg_power) : null,
+      maxPower: lap.max_power || null,
+      avgHR: lap.avg_heart_rate ? Math.round(lap.avg_heart_rate) : null,
+      maxHR: lap.max_heart_rate || null,
+      avgSpeed: lap.avg_speed ? parseFloat(lap.avg_speed.toFixed(1)) : null,
+      dist: lap.total_distance ? parseFloat(lap.total_distance.toFixed(2)) : null,
+      durSec: lap.total_elapsed_time ? Math.round(lap.total_elapsed_time) : null,
+      np: lap.normalized_power || null,
+      tss: null,
+    }));
+  } else {
+    laps = detectLaps(valid, distMiles);
+  }
 
   const ride = {
     id: Date.now(),
