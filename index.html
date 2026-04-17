@@ -503,7 +503,7 @@
   <div id="progressContent" style="display:none">
     <div class="chart-row">
       <div class="chart-card">
-        <h4>Avg power over time (w)</h4>
+        <h4>Normalized power over time (w)</h4>
         <div class="chart-wrap"><canvas id="progressPowerChart"></canvas></div>
       </div>
       <div class="chart-card">
@@ -563,6 +563,8 @@ function showTab(name) {
   document.getElementById('tab-' + name).classList.add('active');
   event.target.classList.add('active');
   if (name === 'progress') renderProgress();
+  if (name === 'segments' && currentRide) renderSegments(currentRide);
+  if (name === 'analysis' && currentRide) renderAnalysis(currentRide);
 }
 
 // ── TOAST ─────────────────────────────────────────────────────────────────
@@ -1181,6 +1183,9 @@ function renderSegments(ride) {
   if (!ride) return;
   document.getElementById('segmentsEmpty').style.display = 'none';
   document.getElementById('segmentsContent').style.display = 'block';
+  // Clear any previously appended hill pass tables
+  const existing = document.querySelectorAll('.hill-passes-section');
+  existing.forEach(el => el.remove());
 
   const { laps, metrics } = ride;
   const fmtTime = s => { const m=Math.floor(s/60),sec=Math.floor(s%60); return `${m}:${String(sec).padStart(2,'0')}`; };
@@ -1251,7 +1256,10 @@ function renderSegments(ride) {
         <strong style="color:var(--accent);">HR/watt</strong> — cardiac cost. Lower = more efficient heart. This should drop over the training block as fitness improves.
       </div>
     `;
-    document.getElementById('segmentsContent').insertAdjacentHTML('beforeend', hillTableHTML);
+    const hillDiv = document.createElement('div');
+    hillDiv.className = 'hill-passes-section';
+    hillDiv.innerHTML = hillTableHTML;
+    document.getElementById('segmentsContent').appendChild(hillDiv);
   }
 
   // Lap table
@@ -1327,7 +1335,12 @@ function renderProgress() {
   document.getElementById('progressContent').style.display = 'block';
 
   const sorted = [...allRides].sort((a,b) => new Date(a.date) - new Date(b.date));
-  const labels = sorted.map(r => new Date(r.date).toLocaleDateString('en-US',{month:'short',day:'numeric'}));
+  const labels = sorted.map(r => {
+    const d = new Date(r.date);
+    const dateStr = d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+    const timeStr = d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true});
+    return dateStr + ' ' + timeStr;
+  });
 
   const progressChartOpts = {
     responsive: true, maintainAspectRatio: false,
@@ -1342,7 +1355,7 @@ function renderProgress() {
 
   charts.progressPowerChart = new Chart(document.getElementById('progressPowerChart'), {
     type: 'line',
-    data: { labels, datasets: [{ data: sorted.map(r => r.metrics.avgPower), borderColor: '#c8f060', backgroundColor: 'rgba(200,240,96,0.1)', fill: true, tension: 0.3, pointRadius: 4, pointBackgroundColor: '#c8f060' }] },
+    data: { labels, datasets: [{ data: sorted.map(r => r.metrics.np || r.metrics.avgPower), borderColor: '#c8f060', backgroundColor: 'rgba(200,240,96,0.1)', fill: true, tension: 0.3, pointRadius: 4, pointBackgroundColor: '#c8f060' }] },
     options: progressChartOpts
   });
 
@@ -1424,7 +1437,7 @@ function renderProgress() {
   const fmtTime = s => { const h=Math.floor(s/3600),m=Math.floor((s%3600)/60); return h>0?`${h}h ${m}m`:`${m}m`; };
   document.getElementById('allRidesList').innerHTML = sorted.reverse().map(r => `
     <div class="ride-row">
-      <div class="ride-date">${new Date(r.date).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})}</div>
+      <div class="ride-date">${(() => { const d = new Date(r.date); return d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true}); })()}</div>
       <div class="ride-name">${r.filename.replace(/\.(fit|gpx|json)$/i,'')}</div>
       <div class="ride-stat">${r.metrics.distMiles||'—'}<span>miles</span></div>
       <div class="ride-stat">${fmtTime(r.metrics.durationSec)}<span>time</span></div>
