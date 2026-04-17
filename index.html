@@ -368,8 +368,8 @@
 
 <header>
   <div class="header-left">
-    <h1>Ride <em>Analysis</em></h1>
-    <div class="header-sub">Iceland Gravel Training · Apr – Jul 2026</div>
+    <h1>Performance <em>Dashboard</em></h1>
+    <div class="header-sub">Ride · Run · Climb · slippitty · 2026</div>
   </div>
   <div class="ftp-badge">
     FTP (watts)
@@ -519,6 +519,16 @@
       <div class="chart-card">
         <h4>Distance per ride (mi)</h4>
         <div class="chart-wrap"><canvas id="progressDistChart"></canvas></div>
+      </div>
+    </div>
+    <div class="chart-row">
+      <div class="chart-card">
+        <h4>PP Hill — best VAM per ride (m/hr)</h4>
+        <div class="chart-wrap"><canvas id="progressVAMChart"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <h4>PP Hill — best w/kg per ride</h4>
+        <div class="chart-wrap"><canvas id="progressWkgChart"></canvas></div>
       </div>
     </div>
     <div class="section-title" style="margin-top:8px;">All rides</div>
@@ -848,6 +858,8 @@ function processRide(points, filename, fitLaps) {
     laps = detectLaps(valid, distMiles);
   }
 
+  const hillPasses = detectHillPasses(valid, 54); // 54kg body weight
+
   const ride = {
     id: Date.now(),
     filename,
@@ -855,6 +867,7 @@ function processRide(points, filename, fitLaps) {
     points: valid,
     metrics: { avgPower, maxPower, np, IF, tss, avgHR, maxHR, avgSpeed, distMiles: parseFloat(distMiles.toFixed(2)), durationSec, zones },
     laps,
+    hillPasses,
   };
 
   currentRide = ride;
@@ -888,6 +901,72 @@ function haversine(lat1, lon1, lat2, lon2) {
   const dLon = (lon2-lon1) * Math.PI/180;
   const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// ── PP HILL DETECTION ──────────────────────────────────────────────────────
+// Prospect Park hill: lat 40.664–40.674, alt gain ~20m over ~0.48mi
+// Detects each individual pass automatically from GPS + altitude data
+function detectHillPasses(points, bodyWeightKg) {
+  const passes = [];
+  let inHill = false, hillStart = null;
+  const wkg = bodyWeightKg || 54;
+
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    if (!p.lat) continue;
+
+    // Hill entry: lat ~40.664-40.668, alt 15-35m, moving north
+    if (!inHill && p.lat > 40.663 && p.lat < 40.669 && p.ele > 10 && p.ele < 38 && p.speed < 20) {
+      if (i + 10 < points.length) {
+        const future = points[i + 10];
+        if (future.lat && future.lat > p.lat && future.ele > p.ele) {
+          inHill = true;
+          hillStart = i;
+        }
+      }
+    }
+
+    // Hill exit: lat > 40.670, alt > 45m
+    if (inHill && p.lat > 40.670 && p.ele > 44) {
+      const chunk = points.slice(hillStart, i + 1);
+      const durSec = chunk[0].time && chunk[chunk.length-1].time
+        ? (chunk[chunk.length-1].time - chunk[0].time) / 1000
+        : chunk.length;
+      const distMi = chunk[chunk.length-1].distance && chunk[0].distance
+        ? chunk[chunk.length-1].distance - chunk[0].distance
+        : 0.48;
+      const altGain = chunk[chunk.length-1].ele - chunk[0].ele;
+      const pows   = chunk.map(x => x.power).filter(x => x > 20);
+      const hrs    = chunk.map(x => x.hr).filter(x => x > 60);
+      const spds   = chunk.map(x => x.speed).filter(x => x > 0);
+
+      if (distMi > 0.25 && distMi < 0.8 && durSec > 60) {
+        const avgPow = pows.length ? pows.reduce((a,b)=>a+b,0)/pows.length : null;
+        const avgHR  = hrs.length  ? hrs.reduce((a,b)=>a+b,0)/hrs.length   : null;
+        const avgSpd = spds.length ? spds.reduce((a,b)=>a+b,0)/spds.length : null;
+        const maxPow = pows.length ? Math.max(...pows) : null;
+        const vam    = altGain > 0 ? Math.round((altGain / durSec) * 3600) : null;
+        const wPerKg = avgPow ? parseFloat((avgPow / wkg).toFixed(2)) : null;
+        const cardiacCost = avgPow && avgHR ? parseFloat((avgHR / avgPow).toFixed(2)) : null; // bpm/watt — lower = more efficient
+
+        passes.push({
+          num: passes.length + 1,
+          durSec: Math.round(durSec),
+          distMi: parseFloat(distMi.toFixed(2)),
+          altGain: Math.round(altGain),
+          avgPower: avgPow ? Math.round(avgPow) : null,
+          maxPower: maxPow,
+          avgHR: avgHR ? Math.round(avgHR) : null,
+          avgSpeed: avgSpd ? parseFloat(avgSpd.toFixed(1)) : null,
+          vam, wPerKg, cardiacCost,
+          gradient: distMi > 0 ? parseFloat(((altGain / (distMi * 1609.34)) * 100).toFixed(1)) : null,
+        });
+      }
+      inHill = false;
+      hillStart = null;
+    }
+  }
+  return passes;
 }
 
 // ── ZONE CALC ─────────────────────────────────────────────────────────────
@@ -1106,29 +1185,74 @@ function renderSegments(ride) {
   const { laps, metrics } = ride;
   const fmtTime = s => { const m=Math.floor(s/60),sec=Math.floor(s%60); return `${m}:${String(sec).padStart(2,'0')}`; };
 
-  // Hill benchmark cards — stored benchmarks
-  const storedBenchmarks = JSON.parse(localStorage.getItem('hillBenchmarks') || '[]');
+  // Hill passes auto-detected from GPS
+  const passes = ride.hillPasses || [];
 
-  // Check if this ride has a hill-like segment (best lap ~2:35 equivalent)
+  // Benchmark targets
   const benchTargets = [
-    { label: 'Baseline — Apr 25', target: 155, targetSpeed: 11.2, targetHR: 144, targetWatts: 168 },
-    { label: 'Test 2 — May 27',   target: 140, targetSpeed: 12.0, targetHR: 142, targetWatts: 178 },
-    { label: 'Test 3 — Jun 12',   target: 130, targetSpeed: 13.0, targetHR: 140, targetWatts: 188 },
-    { label: 'Final — Jul 5',     target: 120, targetSpeed: 13.8, targetHR: 138, targetWatts: 198 },
+    { label: 'Baseline', target: 155, targetSpeed: 11.2, targetHR: 144, targetWatts: 168 },
+    { label: 'Test 2 — May 27', target: 140, targetSpeed: 12.0, targetHR: 142, targetWatts: 178 },
+    { label: 'Test 3 — Jun 12', target: 130, targetSpeed: 13.0, targetHR: 140, targetWatts: 188 },
+    { label: 'Final — Jul 5', target: 120, targetSpeed: 13.8, targetHR: 138, targetWatts: 198 },
   ];
 
+  // Best pass this ride
+  const bestPass = passes.length ? passes.reduce((b,p) => p.durSec < b.durSec ? p : b, passes[0]) : null;
+
   document.getElementById('benchmarkRow').innerHTML = benchTargets.map((b, i) => {
-    const stored = storedBenchmarks[i];
-    const achieved = stored && stored.time <= b.target;
+    const isThis = i === 0 && bestPass;
     return `
-      <div class="bench-card ${stored ? 'achieved' : 'pending'}">
+      <div class="bench-card ${isThis ? 'achieved' : 'pending'}">
         <div class="date">${b.label}</div>
-        <div class="time">${stored ? fmtTime(stored.time) : 'sub ' + fmtTime(b.target)}</div>
-        <div class="meta">${stored ? stored.speed+'mph · '+stored.hr+'bpm' : '>'+b.targetSpeed+'mph · <'+b.targetHR+'bpm'}</div>
+        <div class="time">${isThis ? fmtTime(bestPass.durSec) : 'sub ' + fmtTime(b.target)}</div>
+        <div class="meta">${isThis ? (bestPass.avgSpeed||'—')+'mph · '+(bestPass.avgHR||'—')+'bpm' : '>'+b.targetSpeed+'mph · <'+b.targetHR+'bpm'}</div>
         <div class="target">target: ${fmtTime(b.target)} · ${b.targetWatts}w</div>
       </div>
     `;
   }).join('');
+
+  // Hill passes table
+  if (passes.length) {
+    const bestDur = Math.min(...passes.map(p => p.durSec));
+    const hillTableHTML = `
+      <div class="section-title" style="margin-top:28px;margin-bottom:16px;">
+        PP Hill passes — ${passes.length} detected this ride
+        <span style="color:var(--muted);font-weight:normal;margin-left:12px;">0.48mi @ ~3–5% · auto-detected from GPS</span>
+      </div>
+      <div class="chart-card" style="margin-bottom:16px;">
+        <table class="seg-table">
+          <thead>
+            <tr>
+              <th>Pass</th><th>Time</th><th>Avg Power</th><th>Peak Power</th>
+              <th>w/kg</th><th>Avg HR</th><th>Avg Speed</th><th>VAM</th><th>HR/watt</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${passes.map(p => `
+              <tr>
+                <td>Pass ${p.num}</td>
+                <td class="${p.durSec === bestDur ? 'seg-best' : ''}">${fmtTime(p.durSec)}</td>
+                <td>${p.avgPower ? p.avgPower+'w' : '—'}</td>
+                <td>${p.maxPower ? p.maxPower+'w' : '—'}</td>
+                <td><span class="pill ${p.wPerKg >= 3 ? '' : p.wPerKg >= 2.5 ? 'blue' : 'orange'}">${p.wPerKg||'—'}</span></td>
+                <td>${p.avgHR ? p.avgHR+'bpm' : '—'}</td>
+                <td>${p.avgSpeed ? p.avgSpeed+'mph' : '—'}</td>
+                <td>${p.vam ? p.vam+'m/hr' : '—'}</td>
+                <td>${p.cardiacCost||'—'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 18px;font-size:12px;color:var(--muted);line-height:1.8;">
+        <strong style="color:var(--text);">Climbing metrics explained</strong><br>
+        <strong style="color:var(--accent);">VAM</strong> (Velocità Ascensionale Media) — vertical meters climbed per hour. Pro climbers: 1200–1600. Strong amateur: 600–900. Your target by Iceland: 600+.<br>
+        <strong style="color:var(--accent);">w/kg</strong> — power relative to body weight on the climb. Most important climbing metric. Target: 3.0+ by Iceland.<br>
+        <strong style="color:var(--accent);">HR/watt</strong> — cardiac cost. Lower = more efficient heart. This should drop over the training block as fitness improves.
+      </div>
+    `;
+    document.getElementById('segmentsContent').insertAdjacentHTML('beforeend', hillTableHTML);
+  }
 
   // Lap table
   if (!laps.length) {
@@ -1233,6 +1357,52 @@ function renderProgress() {
     data: { labels, datasets: [{ data: sorted.map(r => r.metrics.distMiles), backgroundColor: 'rgba(96,200,240,0.5)', borderRadius: 4 }] },
     options: progressChartOpts
   });
+
+  // VAM trend — best hill pass per ride
+  const vamData = sorted.map(r => {
+    if (!r.hillPasses || !r.hillPasses.length) return null;
+    return Math.max(...r.hillPasses.map(p => p.vam).filter(Boolean));
+  });
+  if (vamData.some(v => v !== null)) {
+    destroyChart('progressVAMChart');
+    const vamCanvas = document.getElementById('progressVAMChart');
+    if (vamCanvas) {
+      charts.progressVAMChart = new Chart(vamCanvas, {
+        type: 'line',
+        data: { labels, datasets: [{
+          data: vamData,
+          borderColor: '#f0a060', backgroundColor: 'rgba(240,160,96,0.1)',
+          fill: true, tension: 0.3, pointRadius: 5, pointBackgroundColor: '#f0a060',
+          spanGaps: true
+        }] },
+        options: { ...progressChartOpts, scales: { ...progressChartOpts.scales,
+          y: { ...progressChartOpts.scales.y, title: { display: true, text: 'm/hr', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }
+        }}
+      });
+    }
+
+    // w/kg trend
+    const wkgData = sorted.map(r => {
+      if (!r.hillPasses || !r.hillPasses.length) return null;
+      return Math.max(...r.hillPasses.map(p => p.wPerKg).filter(Boolean));
+    });
+    destroyChart('progressWkgChart');
+    const wkgCanvas = document.getElementById('progressWkgChart');
+    if (wkgCanvas) {
+      charts.progressWkgChart = new Chart(wkgCanvas, {
+        type: 'line',
+        data: { labels, datasets: [{
+          data: wkgData,
+          borderColor: '#c8f060', backgroundColor: 'rgba(200,240,96,0.1)',
+          fill: true, tension: 0.3, pointRadius: 5, pointBackgroundColor: '#c8f060',
+          spanGaps: true
+        }] },
+        options: { ...progressChartOpts, scales: { ...progressChartOpts.scales,
+          y: { ...progressChartOpts.scales.y, title: { display: true, text: 'w/kg', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }
+        }}
+      });
+    }
+  }
 
   // Hill chart — placeholder with targets
   const hillTargets = [{ x: 'Apr 25', y: 155 }, { x: 'May 27', y: 140 }, { x: 'Jun 12', y: 130 }, { x: 'Jul 5', y: 120 }];
