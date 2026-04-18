@@ -373,7 +373,7 @@
   </div>
   <div class="ftp-badge">
     FTP (watts)
-    <input type="number" id="ftpInput" value="160" min="100" max="400" onchange="updateFTP(this.value)">
+    <input type="number" id="ftpInput" value="149" min="100" max="400" onchange="updateFTP(this.value)">
   </div>
 </header>
 
@@ -575,7 +575,7 @@ const STRAVA_REDIRECT_URI  = 'https://slippitty.github.io/performance/';
 const STRAVA_SCOPE         = 'read,activity:read_all,profile:read_all';
 
 // ── STATE ─────────────────────────────────────────────────────────────────
-let ftp = parseInt(localStorage.getItem('ftp') || '160');
+let ftp = parseInt(localStorage.getItem('ftp') || '149');
 let rides = JSON.parse(localStorage.getItem('rides') || '[]');
 let currentRide = null;
 let charts = {};
@@ -1614,7 +1614,7 @@ const TRAINING_PLAN = [
   {wk:1,date:'2026-04-22',day:'Wed',event:'',workout:'Zwift: 3x5min Threshold',type:'zwift',target:'10min wu; 3x5min @95–100% FTP; 3min rest; 8min cd — 38 min'},
   // WK 2
   {wk:2,date:'2026-04-23',day:'Thu',event:'',workout:'Track: Fartlek 1/1',type:'run',target:'10x 1min hard Z5 / 1min easy; ~40min total'},
-  {wk:2,date:'2026-04-24',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap. Compare to prior week.',
+  {wk:2,date:'2026-04-24',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap. Compare to prior week.'},
   {wk:2,date:'2026-04-25',day:'Sat',event:'',workout:'PP Ride: Hill Benchmark #1 + Loops',type:'ride',target:'BENCHMARK: time 0.48mi hill. Baseline = 2:35/144bpm/168w. Then 2 easy loops.'},
   {wk:2,date:'2026-04-26',day:'Sun',event:'Brooklyn Half 13.1mi',workout:'RACE: Brooklyn Half Marathon',type:'race',target:'Target sub 2:00. Log every mile split.'},
   {wk:2,date:'2026-04-27',day:'Mon',event:'',workout:'REST — active recovery',type:'rest',target:'Light walking only.'},
@@ -1622,7 +1622,7 @@ const TRAINING_PLAN = [
   {wk:2,date:'2026-04-29',day:'Wed',event:'',workout:'PP Ride: Easy Recovery Loops',type:'ride',target:'2–3 easy loops Z1–Z2; HR <135; no hill effort'},
   // WK 3
   {wk:3,date:'2026-04-30',day:'Thu',event:'',workout:'Track: 800m Repeats',type:'run',target:'5x800m @4:20–4:30; 2min rest; 1mi warm/cool'},
-  {wk:3,date:'2026-05-01',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap. Compare to Apr 24.',
+  {wk:3,date:'2026-05-01',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap. Compare to Apr 24.'},
   {wk:3,date:'2026-05-02',day:'Sat',event:'Mindful 5k',workout:'RACE: Mindful 5k',type:'race',target:'Race flat out. Log time + HR.'},
   {wk:3,date:'2026-05-03',day:'Sun',event:'5 Boro Bike 40mi',workout:'EVENT: 5 Boro Bike (Road)',type:'ride',target:'Moderate Z2–Z3; enjoy it. Log avg HR.'},
   {wk:3,date:'2026-05-04',day:'Mon',event:'',workout:'REST',type:'rest',target:'Full rest.'},
@@ -1638,7 +1638,7 @@ const TRAINING_PLAN = [
   {wk:4,date:'2026-05-13',day:'Wed',event:'',workout:'PP Ride: Hill Repeats',type:'ride',target:'3x full hill effort; log time/HR/speed each rep. Compare to Apr 25.'},
   // WK 5
   {wk:5,date:'2026-05-14',day:'Thu',event:'',workout:'Run: Progressive Tempo',type:'run',target:'4mi: 1mi easy / 2mi @8:50–9:10/mi Z3 / 1mi easy'},
-  {wk:5,date:'2026-05-15',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap. Compare trend.',
+  {wk:5,date:'2026-05-15',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap. Compare trend.'},
   {wk:5,date:'2026-05-16',day:'Sat',event:'BLKYN Half 13.1mi',workout:'RACE: BLKYN Half Marathon',type:'race',target:'Goal: match or beat Brooklyn Half time.'},
   {wk:5,date:'2026-05-17',day:'Sun',event:"Farmers Granddaughter 43mi",workout:"RACE: Farmers Granddaughter Gravel",type:'race',target:'Target avg 14–15mph; HR <160; log climbing total'},
   {wk:5,date:'2026-05-18',day:'Mon',event:'',workout:'Zwift: Ramp Test (Test 2)',type:'zwift',target:'4-week FTP retest. Update zones.'},
@@ -1646,7 +1646,7 @@ const TRAINING_PLAN = [
   {wk:5,date:'2026-05-20',day:'Wed',event:'PPTC 5k',workout:'RACE: PPTC 5k',type:'race',target:'Race effort. Log time vs earlier 5ks.'},
   // WK 6
   {wk:6,date:'2026-05-21',day:'Thu',event:'',workout:"Zwift: 30/30s Power Version",type:'zwift',target:'10min wu; 12x30sec @125% FTP / 30sec @50%; 7min cd — 35 min'},
-  {wk:6,date:'2026-05-22',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap.',
+  {wk:6,date:'2026-05-22',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap.'},
   {wk:6,date:'2026-05-23',day:'Sat',event:'',workout:'Long Gravel: Shirley Chisholm',type:'ride',target:'3–4hrs Z2–Z3; eat every 30–40min; log total climbing'},
   {wk:6,date:'2026-05-24',day:'Sun',event:'Mine Hill Gravel 26mi',workout:'RACE: Mine Hill Gravel',type:'race',target:'Race effort. Log avg watts + climbing ft.'},
   {wk:6,date:'2026-05-25',day:'Mon',event:'',workout:'REST',type:'rest',target:'Memorial Day — full rest'},
@@ -1654,7 +1654,7 @@ const TRAINING_PLAN = [
   {wk:6,date:'2026-05-27',day:'Wed',event:'',workout:'PP Ride: HILL BENCHMARK #2 + Tempo',type:'ride',target:'BENCHMARK: target sub 2:20 / >12mph / <142bpm / >178w. Then 2 tempo loops.'},
   // WK 7
   {wk:7,date:'2026-05-28',day:'Thu',event:'',workout:'Track: HM Pace Run',type:'run',target:'5mi: 1mi wu / 3mi @9:09/mi Z3–Z4 / 1mi cd'},
-  {wk:7,date:'2026-05-29',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap.',
+  {wk:7,date:'2026-05-29',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap.'},
   {wk:7,date:'2026-05-30',day:'Sat',event:'',workout:'Long Gravel: Flushing Meadows / Cunningham',type:'ride',target:'4+hrs Z2; practice eating every 30–40min; log avg HR'},
   {wk:7,date:'2026-05-31',day:'Sun',event:'',workout:'Long Run: Negative Split',type:'run',target:'10mi: first 5mi @11:00/mi, second 5mi @10:00–10:20/mi'},
   {wk:7,date:'2026-06-01',day:'Mon',event:'',workout:'REST',type:'rest',target:'Full rest — big volume weekend'},
@@ -1662,7 +1662,7 @@ const TRAINING_PLAN = [
   {wk:7,date:'2026-06-03',day:'Wed',event:'PPTC 5k',workout:'RACE: PPTC 5k',type:'race',target:'Race effort. Compare to May 20 time.'},
   // WK 8
   {wk:8,date:'2026-06-04',day:'Thu',event:'',workout:'Zwift: VO2 4-min Blocks',type:'zwift',target:'8min wu; 5x4min @110–115% FTP; 4min rest; 6min cd — 38 min'},
-  {wk:8,date:'2026-06-05',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap.',
+  {wk:8,date:'2026-06-05',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap.'},
   {wk:8,date:'2026-06-06',day:'Sat',event:'Mini 10k',workout:'RACE: Mini 10k',type:'race',target:'Race effort. Target sub-55:00 (~8:52/mi).'},
   {wk:8,date:'2026-06-07',day:'Sun',event:'',workout:'PP Ride: Back-to-Back Day 1',type:'ride',target:'90min easy Z2 HR <140; tired legs after 10k — the point'},
   {wk:8,date:'2026-06-08',day:'Mon',event:'',workout:'PP Ride: Back-to-Back Day 2',type:'ride',target:'90min Z2 — intentionally tired; simulates Iceland Day 2.'},
@@ -1670,7 +1670,7 @@ const TRAINING_PLAN = [
   {wk:8,date:'2026-06-10',day:'Wed',event:'',workout:'Zwift: Tempo Blocks — Short',type:'zwift',target:'8min wu; 3x8min @85–90% FTP; 3min rest; 6min cd — 35 min'},
   // WK 9
   {wk:9,date:'2026-06-11',day:'Thu',event:'',workout:'Track: 200m Speed Repeats',type:'run',target:'12x200m @~57–60sec; 60sec rest; 1mi warm/cool'},
-  {wk:9,date:'2026-06-12',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops + Intervals',type:'ride',target:'BENCHMARK #3: target sub 2:10 / >13mph / <140bpm / >188w. Then 3x hill intervals.',
+  {wk:9,date:'2026-06-12',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops + Intervals',type:'ride',target:'BENCHMARK #3: target sub 2:10 / >13mph / <140bpm / >188w. Then 3x hill intervals.'},
   {wk:9,date:'2026-06-13',day:'Sat',event:'',workout:'REST — pre-race',type:'rest',target:'Light walk only. Big race tomorrow.'},
   {wk:9,date:'2026-06-14',day:'Sun',event:'French Creek Iron Tour 60mi',workout:'RACE: French Creek Iron Tour — Gravel',type:'race',target:'Race effort 60mi. Log avg watts, HR, climbing, nutrition.'},
   {wk:9,date:'2026-06-15',day:'Mon',event:'',workout:'Zwift: Ramp Test (Test 3)',type:'zwift',target:'Final FTP check before taper. Update zones.'},
@@ -1678,7 +1678,7 @@ const TRAINING_PLAN = [
   {wk:9,date:'2026-06-17',day:'Wed',event:'PPTC 5k',workout:'RACE: PPTC 5k',type:'race',target:'Low-pressure race. Log pace vs Jun 3.'},
   // WK 10
   {wk:10,date:'2026-06-18',day:'Thu',event:'',workout:'Zwift: VO2 8-min Blocks',type:'zwift',target:'8min wu; 3x8min @108–112% FTP; 4min rest; 8min cd — 40 min'},
-  {wk:10,date:'2026-06-19',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Note how taper legs feel vs prior weeks.',
+  {wk:10,date:'2026-06-19',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Note how taper legs feel vs prior weeks.'},
   {wk:10,date:'2026-06-20',day:'Sat',event:'Queens 10k',workout:'RACE: Queens 10k',type:'race',target:'Race effort. Target sub-54:00 (~8:42/mi).'},
   {wk:10,date:'2026-06-21',day:'Sun',event:'West Chester Roubaix 61mi',workout:'RACE: West Chester Roubaix — Gravel',type:'race',target:'Race effort 61mi. Even watts on climbs.'},
   {wk:10,date:'2026-06-22',day:'Mon',event:'',workout:'REST',type:'rest',target:'Full rest — huge race double'},
@@ -1686,7 +1686,7 @@ const TRAINING_PLAN = [
   {wk:10,date:'2026-06-24',day:'Wed',event:'',workout:'PP Ride: Easy Recovery + Single Hill',type:'ride',target:'2 easy loops; 1 controlled hill effort; log watts.'},
   // WK 11
   {wk:11,date:'2026-06-25',day:'Thu',event:'',workout:'Zwift: Taper Openers',type:'zwift',target:'10min wu; 3x2min @105% / 3min easy; 10min cd — 35 min'},
-  {wk:11,date:'2026-06-26',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops (taper)',type:'ride',target:'4 laps only — taper. Time the hill. Should feel fast with fresh legs.',
+  {wk:11,date:'2026-06-26',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops (taper)',type:'ride',target:'4 laps only — taper. Time the hill. Should feel fast with fresh legs.'},
   {wk:11,date:'2026-06-27',day:'Sat',event:'LGBT 4mi Run',workout:'RACE: LGBT 4-Mile Run',type:'race',target:'Fun race. Log pace.'},
   {wk:11,date:'2026-06-28',day:'Sun',event:'Empire Gravel 70mi',workout:'RACE: Empire Gravel 70mi',type:'race',target:'BIGGEST pre-Iceland race. Smart pacing.'},
   {wk:11,date:'2026-06-29',day:'Mon',event:'',workout:'REST — taper begins',type:'rest',target:'Full rest.'},
@@ -1694,14 +1694,14 @@ const TRAINING_PLAN = [
   {wk:11,date:'2026-07-01',day:'Wed',event:'PPTC 5k',workout:'RACE: PPTC 5k (taper — easy)',type:'race',target:'Treat as a fun run. Z2–Z3 only.'},
   // WK 12
   {wk:12,date:'2026-07-02',day:'Thu',event:'',workout:'Zwift: Short Activation',type:'zwift',target:'10min wu; 4x1min @105% / 2min easy; 10min cd — 30 min'},
-  {wk:12,date:'2026-07-03',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops (final)',type:'ride',target:'4 laps easy. 1 benchmark hill effort. Feel sharp. Iceland in 10 days.',
+  {wk:12,date:'2026-07-03',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops (final)',type:'ride',target:'4 laps easy. 1 benchmark hill effort. Feel sharp. Iceland in 10 days.'},
   {wk:12,date:'2026-07-04',day:'Sat',event:'',workout:'REST / pack gear',type:'rest',target:'4th of July — rest, prep, pack for Iceland'},
   {wk:12,date:'2026-07-05',day:'Sun',event:'',workout:'PP Ride: FINAL HILL BENCHMARK #4',type:'ride',target:'BENCHMARK: target sub 2:00 / >13.8mph / <138bpm / >198w.'},
   {wk:12,date:'2026-07-06',day:'Mon',event:'',workout:'REST / easy walk',type:'rest',target:'Legs up. Eat well. Sleep early.'},
   {wk:12,date:'2026-07-07',day:'Tue',event:'',workout:'Easy Run — Z1 shakeout',type:'run',target:'20min very easy; 11:30+/mi'},
   {wk:12,date:'2026-07-08',day:'Wed',event:'',workout:'Zwift: Short Activation',type:'zwift',target:'8min wu; 3x1min @105% / 2min easy; 6min cd — 25 min'},
   {wk:12,date:'2026-07-09',day:'Thu',event:'',workout:'REST',type:'rest',target:'Full rest. Pack. Prep nutrition for Iceland.'},
-  {wk:12,date:'2026-07-10',day:'Fri',event:'',workout:'REST',type:'rest',target:'Full rest. Iceland in 3 days.',
+  {wk:12,date:'2026-07-10',day:'Fri',event:'',workout:'REST',type:'rest',target:'Full rest. Iceland in 3 days.'},
   {wk:12,date:'2026-07-11',day:'Sat',event:'',workout:'REST',type:'rest',target:'Full rest.'},
   {wk:12,date:'2026-07-12',day:'Sun',event:'',workout:'REST',type:'rest',target:'Full rest. Iceland tomorrow.'},
 ];
