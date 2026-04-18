@@ -378,54 +378,21 @@
 </header>
 
 <nav>
-  <button class="active" onclick="showTab('upload')">Upload</button>
-  <button onclick="showTab('analysis')">Analysis</button>
+  
+  <button onclick="showTab('analysis')">Latest</button>
   <button onclick="showTab('segments')">Segments</button>
   <button onclick="showTab('progress')">Progress</button>
   <button onclick="showTab('strava')">Strava</button>
+  <button class="active" onclick="showTab('plan')">Plan</button>
 </nav>
 
 <main>
 
-<!-- UPLOAD TAB -->
-<div id="tab-upload" class="tab-panel active">
-  <div class="upload-area" id="dropZone">
-    <input type="file" id="fileInput" accept=".fit,.gpx,.json" multiple onchange="handleFiles(this.files)">
-    <div class="upload-icon">↑</div>
-    <h3>Drop your activity file here</h3>
-    <p>Drag & drop or click to browse. Works with Garmin and Strava exports.</p>
-    <div class="formats">.FIT · .GPX · .JSON</div>
-  </div>
-  <div class="loading" id="loadingMsg"><span>Parsing activity data…</span></div>
-
-  <div id="uploadedList" class="rides-list"></div>
-
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;margin-top:8px;">
-    <div class="section-title">How to export</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;">
-      <div>
-        <div style="font-family:var(--mono);font-size:11px;color:var(--accent);margin-bottom:8px;">GARMIN CONNECT</div>
-        <div style="font-size:12px;color:var(--muted);line-height:1.8;">
-          Activity → ⋯ menu → Export Original<br>
-          Downloads a <strong style="color:var(--text)">.fit</strong> file with full power + HR data
-        </div>
-      </div>
-      <div>
-        <div style="font-family:var(--mono);font-size:11px;color:var(--accent2);margin-bottom:8px;">STRAVA</div>
-        <div style="font-size:12px;color:var(--muted);line-height:1.8;">
-          Activity → ⋯ → Export GPX<br>
-          Downloads a <strong style="color:var(--text)">.gpx</strong> file. HR included; power if your device recorded it.
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
 <!-- ANALYSIS TAB -->
 <div id="tab-analysis" class="tab-panel">
   <div id="analysisEmpty" class="empty-state">
-    <h3>No activity loaded</h3>
-    <p>Upload a .fit or .gpx file to see your analysis</p>
+    <h3>Loading latest activity...</h3>
+    <p style="color:var(--muted);">Connect Strava to auto-load your most recent ride</p>
   </div>
   <div id="analysisContent" style="display:none">
     <div class="stats-grid" id="statsGrid"></div>
@@ -584,6 +551,18 @@
   </div>
 </div>
 
+
+<!-- PLAN TAB -->
+<div id="tab-plan" class="tab-panel">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;">
+    <div>
+      <div style="font-family:var(--serif);font-size:1.4rem;font-weight:400;">Training Plan</div>
+      <div style="font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:4px;">Apr 20 — Jul 12 · Iceland departs Jul 13 · Connect Strava to auto-match activities</div>
+    </div>
+  </div>
+  <div id="planContainer"></div>
+</div>
+
 </main>
 
 <div class="toast" id="toast"></div>
@@ -623,6 +602,7 @@ function showTab(name, evt) {
   if (name === 'segments' && currentRide) renderSegments(currentRide);
   if (name === 'strava') { renderStravaButton(); if (isStravaConnected()) { renderStravaContent(); renderStravaProgress(); } }
   if (name === 'progress') { setTimeout(() => { if (isStravaConnected()) { renderStravaProgress(); renderStravaProgressInProgress(); } }, 100); }
+  if (name === 'plan') renderPlan();
   if (name === 'analysis' && currentRide) renderAnalysis(currentRide);
 }
 
@@ -1627,6 +1607,182 @@ function getZoneName(power, ftp) {
 }
 
 
+const TRAINING_PLAN = [
+  // WK 1
+  {wk:1,date:'2026-04-20',day:'Mon',event:'',workout:'Zwift: Ramp Test (FTP Baseline)',type:'zwift',target:'Complete ramp test. Log FTP. Update zones.'},
+  {wk:1,date:'2026-04-21',day:'Tue',event:'',workout:'Easy Run — Z2',type:'run',target:'3mi @ 10:30–11:00/mi; conversational; HR <140'},
+  {wk:1,date:'2026-04-22',day:'Wed',event:'',workout:'Zwift: 3x5min Threshold',type:'zwift',target:'10min wu; 3x5min @95–100% FTP; 3min rest; 8min cd — 38 min'},
+  // WK 2
+  {wk:2,date:'2026-04-23',day:'Thu',event:'',workout:'Track: Fartlek 1/1',type:'run',target:'10x 1min hard Z5 / 1min easy; ~40min total'},
+  {wk:2,date:'2026-04-24',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap. Compare to prior week.',
+  {wk:2,date:'2026-04-25',day:'Sat',event:'',workout:'PP Ride: Hill Benchmark #1 + Loops',type:'ride',target:'BENCHMARK: time 0.48mi hill. Baseline = 2:35/144bpm/168w. Then 2 easy loops.'},
+  {wk:2,date:'2026-04-26',day:'Sun',event:'Brooklyn Half 13.1mi',workout:'RACE: Brooklyn Half Marathon',type:'race',target:'Target sub 2:00. Log every mile split.'},
+  {wk:2,date:'2026-04-27',day:'Mon',event:'',workout:'REST — active recovery',type:'rest',target:'Light walking only.'},
+  {wk:2,date:'2026-04-28',day:'Tue',event:'',workout:'Easy Run Z1 shakeout',type:'run',target:'3mi very easy 11:00+/mi; flush legs'},
+  {wk:2,date:'2026-04-29',day:'Wed',event:'',workout:'PP Ride: Easy Recovery Loops',type:'ride',target:'2–3 easy loops Z1–Z2; HR <135; no hill effort'},
+  // WK 3
+  {wk:3,date:'2026-04-30',day:'Thu',event:'',workout:'Track: 800m Repeats',type:'run',target:'5x800m @4:20–4:30; 2min rest; 1mi warm/cool'},
+  {wk:3,date:'2026-05-01',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap. Compare to Apr 24.',
+  {wk:3,date:'2026-05-02',day:'Sat',event:'Mindful 5k',workout:'RACE: Mindful 5k',type:'race',target:'Race flat out. Log time + HR.'},
+  {wk:3,date:'2026-05-03',day:'Sun',event:'5 Boro Bike 40mi',workout:'EVENT: 5 Boro Bike (Road)',type:'ride',target:'Moderate Z2–Z3; enjoy it. Log avg HR.'},
+  {wk:3,date:'2026-05-04',day:'Mon',event:'',workout:'REST',type:'rest',target:'Full rest.'},
+  {wk:3,date:'2026-05-05',day:'Tue',event:'BK 5k 6pm',workout:'RACE: BK 5k',type:'race',target:'Race effort. Compare to Mindful 5k time.'},
+  {wk:3,date:'2026-05-06',day:'Wed',event:'',workout:'PP Ride: Tempo Loops',type:'ride',target:'3 loops: 1 easy Z2 / 1 tempo Z3 push the hill / 1 easy cooldown'},
+  // WK 4
+  {wk:4,date:'2026-05-07',day:'Thu',event:'',workout:'Run: Easy + Hill Strides',type:'run',target:'4mi easy Z2 + 6x20sec hill sprints; walk back down each'},
+  {wk:4,date:'2026-05-08',day:'Fri',event:'In Asbury Park',workout:'Outdoor Ride — easy exploration',type:'ride',target:'Z1–Z2 only; enjoy; log distance + HR'},
+  {wk:4,date:'2026-05-09',day:'Sat',event:'In Asbury Park',workout:'Long Ride or Run — Asbury area',type:'ride',target:'Ride 2–3hrs Z2 OR long run 8mi+'},
+  {wk:4,date:'2026-05-10',day:'Sun',event:'In Asbury Park',workout:'Active recovery — easy walk',type:'rest',target:'Rest / tourism'},
+  {wk:4,date:'2026-05-11',day:'Mon',event:'',workout:'Zwift: Over-Unders',type:'zwift',target:'10min wu; 4x(3min @95% / 2min @105%); 5min rest; 5min cd — 40 min'},
+  {wk:4,date:'2026-05-12',day:'Tue',event:'',workout:'Track: 400m Repeats',type:'run',target:'8x400m @2:05–2:10; 90sec rest; 1mi warm/cool'},
+  {wk:4,date:'2026-05-13',day:'Wed',event:'',workout:'PP Ride: Hill Repeats',type:'ride',target:'3x full hill effort; log time/HR/speed each rep. Compare to Apr 25.'},
+  // WK 5
+  {wk:5,date:'2026-05-14',day:'Thu',event:'',workout:'Run: Progressive Tempo',type:'run',target:'4mi: 1mi easy / 2mi @8:50–9:10/mi Z3 / 1mi easy'},
+  {wk:5,date:'2026-05-15',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap. Compare trend.',
+  {wk:5,date:'2026-05-16',day:'Sat',event:'BLKYN Half 13.1mi',workout:'RACE: BLKYN Half Marathon',type:'race',target:'Goal: match or beat Brooklyn Half time.'},
+  {wk:5,date:'2026-05-17',day:'Sun',event:"Farmers Granddaughter 43mi",workout:"RACE: Farmers Granddaughter Gravel",type:'race',target:'Target avg 14–15mph; HR <160; log climbing total'},
+  {wk:5,date:'2026-05-18',day:'Mon',event:'',workout:'Zwift: Ramp Test (Test 2)',type:'zwift',target:'4-week FTP retest. Update zones.'},
+  {wk:5,date:'2026-05-19',day:'Tue',event:'',workout:'REST',type:'rest',target:'Full recovery.'},
+  {wk:5,date:'2026-05-20',day:'Wed',event:'PPTC 5k',workout:'RACE: PPTC 5k',type:'race',target:'Race effort. Log time vs earlier 5ks.'},
+  // WK 6
+  {wk:6,date:'2026-05-21',day:'Thu',event:'',workout:"Zwift: 30/30s Power Version",type:'zwift',target:'10min wu; 12x30sec @125% FTP / 30sec @50%; 7min cd — 35 min'},
+  {wk:6,date:'2026-05-22',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap.',
+  {wk:6,date:'2026-05-23',day:'Sat',event:'',workout:'Long Gravel: Shirley Chisholm',type:'ride',target:'3–4hrs Z2–Z3; eat every 30–40min; log total climbing'},
+  {wk:6,date:'2026-05-24',day:'Sun',event:'Mine Hill Gravel 26mi',workout:'RACE: Mine Hill Gravel',type:'race',target:'Race effort. Log avg watts + climbing ft.'},
+  {wk:6,date:'2026-05-25',day:'Mon',event:'',workout:'REST',type:'rest',target:'Memorial Day — full rest'},
+  {wk:6,date:'2026-05-26',day:'Tue',event:'',workout:'Run: Easy + Drills',type:'run',target:'4mi easy Z2 + 5min drills (high knees, butt kicks, A-skips)'},
+  {wk:6,date:'2026-05-27',day:'Wed',event:'',workout:'PP Ride: HILL BENCHMARK #2 + Tempo',type:'ride',target:'BENCHMARK: target sub 2:20 / >12mph / <142bpm / >178w. Then 2 tempo loops.'},
+  // WK 7
+  {wk:7,date:'2026-05-28',day:'Thu',event:'',workout:'Track: HM Pace Run',type:'run',target:'5mi: 1mi wu / 3mi @9:09/mi Z3–Z4 / 1mi cd'},
+  {wk:7,date:'2026-05-29',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap.',
+  {wk:7,date:'2026-05-30',day:'Sat',event:'',workout:'Long Gravel: Flushing Meadows / Cunningham',type:'ride',target:'4+hrs Z2; practice eating every 30–40min; log avg HR'},
+  {wk:7,date:'2026-05-31',day:'Sun',event:'',workout:'Long Run: Negative Split',type:'run',target:'10mi: first 5mi @11:00/mi, second 5mi @10:00–10:20/mi'},
+  {wk:7,date:'2026-06-01',day:'Mon',event:'',workout:'REST',type:'rest',target:'Full rest — big volume weekend'},
+  {wk:7,date:'2026-06-02',day:'Tue',event:'',workout:'PP Ride: Easy Recovery + Single Hill',type:'ride',target:'2 easy loops; 1 controlled hill effort; log watts.'},
+  {wk:7,date:'2026-06-03',day:'Wed',event:'PPTC 5k',workout:'RACE: PPTC 5k',type:'race',target:'Race effort. Compare to May 20 time.'},
+  // WK 8
+  {wk:8,date:'2026-06-04',day:'Thu',event:'',workout:'Zwift: VO2 4-min Blocks',type:'zwift',target:'8min wu; 5x4min @110–115% FTP; 4min rest; 6min cd — 38 min'},
+  {wk:8,date:'2026-06-05',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap.',
+  {wk:8,date:'2026-06-06',day:'Sat',event:'Mini 10k',workout:'RACE: Mini 10k',type:'race',target:'Race effort. Target sub-55:00 (~8:52/mi).'},
+  {wk:8,date:'2026-06-07',day:'Sun',event:'',workout:'PP Ride: Back-to-Back Day 1',type:'ride',target:'90min easy Z2 HR <140; tired legs after 10k — the point'},
+  {wk:8,date:'2026-06-08',day:'Mon',event:'',workout:'PP Ride: Back-to-Back Day 2',type:'ride',target:'90min Z2 — intentionally tired; simulates Iceland Day 2.'},
+  {wk:8,date:'2026-06-09',day:'Tue',event:'',workout:'Easy Run Z1',type:'run',target:'Very easy 3mi; 11:00+/mi; recovery'},
+  {wk:8,date:'2026-06-10',day:'Wed',event:'',workout:'Zwift: Tempo Blocks — Short',type:'zwift',target:'8min wu; 3x8min @85–90% FTP; 3min rest; 6min cd — 35 min'},
+  // WK 9
+  {wk:9,date:'2026-06-11',day:'Thu',event:'',workout:'Track: 200m Speed Repeats',type:'run',target:'12x200m @~57–60sec; 60sec rest; 1mi warm/cool'},
+  {wk:9,date:'2026-06-12',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops + Intervals',type:'ride',target:'BENCHMARK #3: target sub 2:10 / >13mph / <140bpm / >188w. Then 3x hill intervals.',
+  {wk:9,date:'2026-06-13',day:'Sat',event:'',workout:'REST — pre-race',type:'rest',target:'Light walk only. Big race tomorrow.'},
+  {wk:9,date:'2026-06-14',day:'Sun',event:'French Creek Iron Tour 60mi',workout:'RACE: French Creek Iron Tour — Gravel',type:'race',target:'Race effort 60mi. Log avg watts, HR, climbing, nutrition.'},
+  {wk:9,date:'2026-06-15',day:'Mon',event:'',workout:'Zwift: Ramp Test (Test 3)',type:'zwift',target:'Final FTP check before taper. Update zones.'},
+  {wk:9,date:'2026-06-16',day:'Tue',event:'',workout:'REST',type:'rest',target:'Recovery after 60mi race + FTP test'},
+  {wk:9,date:'2026-06-17',day:'Wed',event:'PPTC 5k',workout:'RACE: PPTC 5k',type:'race',target:'Low-pressure race. Log pace vs Jun 3.'},
+  // WK 10
+  {wk:10,date:'2026-06-18',day:'Thu',event:'',workout:'Zwift: VO2 8-min Blocks',type:'zwift',target:'8min wu; 3x8min @108–112% FTP; 4min rest; 8min cd — 40 min'},
+  {wk:10,date:'2026-06-19',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Note how taper legs feel vs prior weeks.',
+  {wk:10,date:'2026-06-20',day:'Sat',event:'Queens 10k',workout:'RACE: Queens 10k',type:'race',target:'Race effort. Target sub-54:00 (~8:42/mi).'},
+  {wk:10,date:'2026-06-21',day:'Sun',event:'West Chester Roubaix 61mi',workout:'RACE: West Chester Roubaix — Gravel',type:'race',target:'Race effort 61mi. Even watts on climbs.'},
+  {wk:10,date:'2026-06-22',day:'Mon',event:'',workout:'REST',type:'rest',target:'Full rest — huge race double'},
+  {wk:10,date:'2026-06-23',day:'Tue',event:'',workout:'Run: Easy + Drills',type:'run',target:'3mi easy + drills; neuromuscular maintenance'},
+  {wk:10,date:'2026-06-24',day:'Wed',event:'',workout:'PP Ride: Easy Recovery + Single Hill',type:'ride',target:'2 easy loops; 1 controlled hill effort; log watts.'},
+  // WK 11
+  {wk:11,date:'2026-06-25',day:'Thu',event:'',workout:'Zwift: Taper Openers',type:'zwift',target:'10min wu; 3x2min @105% / 3min easy; 10min cd — 35 min'},
+  {wk:11,date:'2026-06-26',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops (taper)',type:'ride',target:'4 laps only — taper. Time the hill. Should feel fast with fresh legs.',
+  {wk:11,date:'2026-06-27',day:'Sat',event:'LGBT 4mi Run',workout:'RACE: LGBT 4-Mile Run',type:'race',target:'Fun race. Log pace.'},
+  {wk:11,date:'2026-06-28',day:'Sun',event:'Empire Gravel 70mi',workout:'RACE: Empire Gravel 70mi',type:'race',target:'BIGGEST pre-Iceland race. Smart pacing.'},
+  {wk:11,date:'2026-06-29',day:'Mon',event:'',workout:'REST — taper begins',type:'rest',target:'Full rest.'},
+  {wk:11,date:'2026-06-30',day:'Tue',event:'',workout:'Run: Barefoot Grass Jog',type:'run',target:'20min very easy on grass; proprioception + recovery'},
+  {wk:11,date:'2026-07-01',day:'Wed',event:'PPTC 5k',workout:'RACE: PPTC 5k (taper — easy)',type:'race',target:'Treat as a fun run. Z2–Z3 only.'},
+  // WK 12
+  {wk:12,date:'2026-07-02',day:'Thu',event:'',workout:'Zwift: Short Activation',type:'zwift',target:'10min wu; 4x1min @105% / 2min easy; 10min cd — 30 min'},
+  {wk:12,date:'2026-07-03',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops (final)',type:'ride',target:'4 laps easy. 1 benchmark hill effort. Feel sharp. Iceland in 10 days.',
+  {wk:12,date:'2026-07-04',day:'Sat',event:'',workout:'REST / pack gear',type:'rest',target:'4th of July — rest, prep, pack for Iceland'},
+  {wk:12,date:'2026-07-05',day:'Sun',event:'',workout:'PP Ride: FINAL HILL BENCHMARK #4',type:'ride',target:'BENCHMARK: target sub 2:00 / >13.8mph / <138bpm / >198w.'},
+  {wk:12,date:'2026-07-06',day:'Mon',event:'',workout:'REST / easy walk',type:'rest',target:'Legs up. Eat well. Sleep early.'},
+  {wk:12,date:'2026-07-07',day:'Tue',event:'',workout:'Easy Run — Z1 shakeout',type:'run',target:'20min very easy; 11:30+/mi'},
+  {wk:12,date:'2026-07-08',day:'Wed',event:'',workout:'Zwift: Short Activation',type:'zwift',target:'8min wu; 3x1min @105% / 2min easy; 6min cd — 25 min'},
+  {wk:12,date:'2026-07-09',day:'Thu',event:'',workout:'REST',type:'rest',target:'Full rest. Pack. Prep nutrition for Iceland.'},
+  {wk:12,date:'2026-07-10',day:'Fri',event:'',workout:'REST',type:'rest',target:'Full rest. Iceland in 3 days.',
+  {wk:12,date:'2026-07-11',day:'Sat',event:'',workout:'REST',type:'rest',target:'Full rest.'},
+  {wk:12,date:'2026-07-12',day:'Sun',event:'',workout:'REST',type:'rest',target:'Full rest. Iceland tomorrow.'},
+];
+// ── LATEST ACTIVITY ──────────────────────────────────────────────────────
+async function loadLatestStravaActivity() {
+  const analysisEmpty = document.getElementById('analysisEmpty');
+  const analysisContent = document.getElementById('analysisContent');
+  if (analysisEmpty) {
+    analysisEmpty.style.display = 'block';
+    analysisEmpty.innerHTML = '<h3>Loading latest activity...</h3><p style="color:var(--muted);margin-top:8px;font-family:var(--mono);font-size:11px;">Fetching from Strava</p>';
+  }
+
+  if (!isStravaConnected()) {
+    if (analysisEmpty) analysisEmpty.innerHTML = '<h3>Connect Strava to see your latest activity</h3><p>Go to the Strava tab to connect.</p>';
+    return;
+  }
+
+  try {
+    // Get most recent activity
+    const activities = await stravaFetch('/athlete/activities?per_page=1');
+    if (!activities || !activities.length) {
+      if (analysisEmpty) analysisEmpty.innerHTML = '<h3>No activities found</h3>';
+      return;
+    }
+
+    const latest = activities[0];
+
+    // Get full activity with streams
+    const [detail, streams] = await Promise.all([
+      stravaFetch('/activities/' + latest.id + '?include_all_efforts=true'),
+      stravaFetch('/activities/' + latest.id + '/streams?keys=time,watts,heartrate,velocity_smooth,altitude,latlng,distance&key_by_type=true'),
+    ]);
+
+    if (!detail) {
+      if (analysisEmpty) analysisEmpty.innerHTML = '<h3>Could not load activity</h3>';
+      return;
+    }
+
+    // Build points array from streams
+    const len = streams?.time?.data?.length || 0;
+    const points = [];
+    for (let i = 0; i < len; i++) {
+      const t = streams.time?.data[i] || 0;
+      const latlon = streams.latlng?.data[i];
+      points.push({
+        time: new Date(new Date(latest.start_date).getTime() + t * 1000),
+        lat: latlon ? latlon[0] : null,
+        lon: latlon ? latlon[1] : null,
+        power: streams.watts?.data[i] || 0,
+        hr: streams.heartrate?.data[i] || 0,
+        speed: streams.velocity_smooth?.data[i] ? streams.velocity_smooth.data[i] * 2.23694 : 0,
+        ele: streams.altitude?.data[i] || 0,
+        distance: streams.distance?.data[i] ? streams.distance.data[i] * 0.000621371 : 0,
+      });
+    }
+
+    // Build fitLaps from segment efforts
+    const fitLaps = (detail.segment_efforts || [])
+      .filter(e => e.segment.starred)
+      .map((e, i) => ({
+        num: i + 1,
+        avgPower: e.average_watts ? Math.round(e.average_watts) : null,
+        maxPower: null,
+        avgHR: e.average_heartrate ? Math.round(e.average_heartrate) : null,
+        avgSpeed: e.average_speed ? parseFloat((e.average_speed * 2.23694).toFixed(1)) : null,
+        dist: parseFloat((e.segment.distance * 0.000621371).toFixed(2)),
+        durSec: e.elapsed_time,
+        name: e.segment.name,
+      }));
+
+    // Update header to show activity name
+    const headerSub = document.querySelector('.header-sub');
+    if (headerSub) headerSub.textContent = latest.name + ' · ' + new Date(latest.start_date_local).toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});
+
+    processRide(points, latest.name, fitLaps);
+  } catch(e) {
+    console.error('Latest activity error:', e);
+    if (analysisEmpty) analysisEmpty.innerHTML = '<h3>Error loading activity</h3><p style="color:var(--muted);">' + e.message + '</p>';
+  }
+}
+
 // ── STRAVA AUTH ───────────────────────────────────────────────────────────
 function stravaConnect() {
   const url = 'https://www.strava.com/oauth/authorize?client_id=' + STRAVA_CLIENT_ID
@@ -1835,16 +1991,19 @@ function renderStravaContent() {
   const activities = JSON.parse(localStorage.getItem('strava_activities') || '[]');
   const segments   = JSON.parse(localStorage.getItem('strava_segments') || '[]');
 
-  // Sort segments: starred first, then by effort count
-  const sorted = segments.sort((a,b) => (b.starred?1:0)-(a.starred?1:0) || b.efforts.length - a.efforts.length);
+  // Only show starred segments, sorted by effort count
+  const sorted = segments.filter(s => s.starred).sort((a,b) => b.efforts.length - a.efforts.length);
 
   const fmtDate = d => new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric'});
   const fmtTime = s => { const h=Math.floor(s/3600),m=Math.floor((s%3600)/60); return h>0?h+'h '+m+'m':m+'m'; };
 
   // Segments table
   let segsHTML = '';
+  if (!sorted.length) {
+    segsHTML = '<div style="text-align:center;padding:40px 20px;"><div style="font-family:var(--serif);font-size:1.2rem;margin-bottom:8px;">No starred segments yet</div><div style="color:var(--muted);font-size:13px;">Star segments on Strava then hit Sync to load them here.</div></div>';
+  }
   if (sorted.length) {
-    segsHTML = '<div class="section-title" style="margin-bottom:12px;">Segments — recent efforts</div>'
+    segsHTML = '<div class="section-title" style="margin-bottom:12px;">Starred segments — recent efforts</div>'
       + '<div class="chart-card" style="margin-bottom:20px;overflow-x:auto;">'
       + '<table class="seg-table"><thead><tr>'
       + '<th>Segment</th><th>Dist</th><th>Grade</th><th>Best this block</th><th>Your PR</th><th>Efforts</th><th>Last effort</th><th>Avg Power</th><th>Avg HR</th>'
@@ -1855,7 +2014,7 @@ function renderStravaContent() {
       const last = seg.efforts.sort((a,b) => new Date(b.date)-new Date(a.date))[0];
       const isPR = best && seg.pr && best.elapsed <= seg.pr.elapsed;
       segsHTML += '<tr>'
-        + '<td><span class="seg-name">' + (seg.starred ? '★ ' : '') + seg.name + '</span></td>'
+        + '<td><span class="seg-name">' + seg.name + '</span></td>'
         + '<td>' + seg.distMi + 'mi</td>'
         + '<td>' + (seg.grade||0).toFixed(1) + '%</td>'
         + '<td class="' + (isPR ? 'seg-best' : '') + '">' + (best ? fmtSecs(best.elapsed) : '--')
@@ -2082,6 +2241,138 @@ function renderStravaProgressInProgress() {
   }
 }
 
+
+// ── TRAINING PLAN ────────────────────────────────────────────────────────
+function getPlanStatus(date) {
+  return JSON.parse(localStorage.getItem('plan_status') || '{}')[date] || 'pending';
+}
+
+function setPlanStatus(date, status) {
+  const s = JSON.parse(localStorage.getItem('plan_status') || '{}');
+  s[date] = status;
+  localStorage.setItem('plan_status', JSON.stringify(s));
+  renderPlan();
+}
+
+function matchStravaActivity(date) {
+  // Find Strava activity on same date
+  const activities = [
+    ...JSON.parse(localStorage.getItem('strava_activities') || '[]'),
+    ...JSON.parse(localStorage.getItem('strava_runs') || '[]'),
+  ];
+  const d = date.slice(0,10);
+  return activities.filter(a => a.date && a.date.slice(0,10) === d);
+}
+
+function renderPlan() {
+  const container = document.getElementById('planContainer');
+  if (!container) return;
+
+  const today = new Date().toISOString().slice(0,10);
+  const status = JSON.parse(localStorage.getItem('plan_status') || '{}');
+
+  // Group by week
+  const weeks = {};
+  TRAINING_PLAN.forEach(w => {
+    if (!weeks[w.wk]) weeks[w.wk] = [];
+    weeks[w.wk].push(w);
+  });
+
+  // Stats
+  const total = TRAINING_PLAN.length;
+  const done  = Object.values(status).filter(s => s === 'done').length;
+  const skipped = Object.values(status).filter(s => s === 'skipped').length;
+  const past  = TRAINING_PLAN.filter(w => w.date < today).length;
+  const pct   = past > 0 ? Math.round(done/past*100) : 0;
+
+  const typeColors = {
+    race: '#f0a060', ride: '#60c8f0', run: '#c8f060',
+    zwift: '#a060f0', rest: '#444', strength: '#f06060'
+  };
+  const typeBg = {
+    race: 'rgba(240,160,96,0.08)', ride: 'rgba(96,200,240,0.06)',
+    run: 'rgba(200,240,96,0.06)', zwift: 'rgba(160,96,240,0.06)',
+    rest: 'rgba(255,255,255,0.02)', strength: 'rgba(240,96,96,0.06)'
+  };
+
+  const fmtTime = s => { if(!s) return '--'; const h=Math.floor(s/3600),m=Math.floor((s%3600)/60); return h>0?h+'h '+m+'m':m+'m'; };
+
+  let html = `
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:28px;">
+      <div class="stat-card" style="--accent-color:var(--accent)">
+        <div class="stat-label">Completed</div>
+        <div class="stat-value">${done}<small>/${past} past days</small></div>
+        <div class="stat-sub">${pct}% adherence</div>
+      </div>
+      <div class="stat-card" style="--accent-color:var(--accent2)">
+        <div class="stat-label">Remaining</div>
+        <div class="stat-value">${total - done - skipped}<small> workouts</small></div>
+        <div class="stat-sub">to Iceland Jul 13</div>
+      </div>
+      <div class="stat-card" style="--accent-color:var(--accent3)">
+        <div class="stat-label">Skipped</div>
+        <div class="stat-value">${skipped}</div>
+        <div class="stat-sub">marked as skipped</div>
+      </div>
+      <div class="stat-card" style="--accent-color:var(--accent)">
+        <div class="stat-label">Weeks to Iceland</div>
+        <div class="stat-value">${Math.max(0,Math.ceil((new Date('2026-07-13')-new Date())/604800000))}</div>
+        <div class="stat-sub">departing Jul 13</div>
+      </div>
+    </div>`;
+
+  for (const [wk, days] of Object.entries(weeks)) {
+    html += `<div style="margin-bottom:24px;">
+      <div style="font-family:var(--mono);font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);padding:6px 0 10px;border-bottom:1px solid var(--border);margin-bottom:10px;">Week ${wk}</div>`;
+
+    for (const day of days) {
+      const st = status[day.date] || 'pending';
+      const isToday = day.date === today;
+      const isPast  = day.date < today;
+      const matches = matchStravaActivity(day.date);
+      const color   = typeColors[day.type] || '#888';
+      const bg      = typeBg[day.type] || 'rgba(255,255,255,0.02)';
+      const isBenchmark = day.workout.toLowerCase().includes('benchmark');
+
+      html += `<div style="display:grid;grid-template-columns:90px 16px 1fr auto;gap:10px;align-items:start;padding:10px 12px;border-radius:8px;margin-bottom:4px;background:${bg};border:1px solid ${isToday ? color : st==='done' ? 'rgba(200,240,96,0.2)' : 'var(--border)'};${isToday ? 'box-shadow:0 0 0 1px '+color+';' : ''}">
+        <div>
+          <div style="font-family:var(--mono);font-size:10px;color:var(--muted);">${day.day} ${new Date(day.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div>
+          ${isToday ? '<div style="font-family:var(--mono);font-size:9px;color:'+color+';margin-top:2px;">TODAY</div>' : ''}
+        </div>
+        <div style="width:3px;height:100%;border-radius:2px;background:${color};margin-top:2px;min-height:16px;"></div>
+        <div>
+          <div style="font-size:12px;color:var(--text);margin-bottom:3px;">${isBenchmark ? '📍 ' : ''}${day.workout}</div>
+          ${day.event ? '<div style="font-family:var(--mono);font-size:10px;color:'+color+';">'+day.event+'</div>' : ''}
+          <div style="font-size:11px;color:var(--muted);margin-top:2px;">${day.target}</div>
+          ${matches.length ? matches.map(a => `
+            <div style="margin-top:6px;padding:6px 10px;background:rgba(200,240,96,0.06);border:1px solid rgba(200,240,96,0.2);border-radius:5px;display:flex;gap:16px;flex-wrap:wrap;">
+              <span style="font-family:var(--mono);font-size:10px;color:var(--accent);">✓ ${a.name}</span>
+              ${a.distMiles ? '<span style="font-family:var(--mono);font-size:10px;color:var(--muted);">'+a.distMiles+'mi</span>' : ''}
+              ${a.durationSec ? '<span style="font-family:var(--mono);font-size:10px;color:var(--muted);">'+fmtTime(a.durationSec)+'</span>' : ''}
+              ${(a.np||a.avgPower) ? '<span style="font-family:var(--mono);font-size:10px;color:var(--muted);">'+(a.np||a.avgPower)+'w NP</span>' : ''}
+              ${a.avgHR ? '<span style="font-family:var(--mono);font-size:10px;color:var(--muted);">'+Math.round(a.avgHR)+'bpm</span>' : ''}
+              ${a.avgPaceMPM ? '<span style="font-family:var(--mono);font-size:10px;color:var(--muted);">'+Math.floor(a.avgPaceMPM)+':'+(String(Math.round((a.avgPaceMPM%1)*60)).padStart(2,'0'))+'/mi</span>' : ''}
+            </div>
+          `).join('') : ''}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;">
+          <button onclick="setPlanStatus('${day.date}','${st==='done'?'pending':'done'}')"
+            style="background:${st==='done'?'rgba(200,240,96,0.15)':'var(--surface2)'};border:1px solid ${st==='done'?'var(--accent)':'var(--border)'};color:${st==='done'?'var(--accent)':'var(--muted)'};font-family:var(--mono);font-size:10px;padding:4px 10px;border-radius:4px;cursor:pointer;white-space:nowrap;">
+            ${st==='done'?'✓ Done':'Mark done'}
+          </button>
+          <button onclick="setPlanStatus('${day.date}','${st==='skipped'?'pending':'skipped'}')"
+            style="background:${st==='skipped'?'rgba(240,96,96,0.1)':'var(--surface2)'};border:1px solid ${st==='skipped'?'var(--danger)':'var(--border)'};color:${st==='skipped'?'var(--danger)':'var(--muted)'};font-family:var(--mono);font-size:10px;padding:4px 10px;border-radius:4px;cursor:pointer;">
+            ${st==='skipped'?'× Skipped':'Skip'}
+          </button>
+        </div>
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  container.innerHTML = html;
+}
+
 // Handle OAuth callback on page load
 async function handleStravaCallback() {
   const params = new URLSearchParams(window.location.search);
@@ -2100,10 +2391,10 @@ async function handleStravaCallback() {
 }
 
 // Init
-renderUploadedList();
 renderStravaButton();
 handleStravaCallback();
-if (isStravaConnected()) { renderStravaProgressInProgress(); }
+if (isStravaConnected()) { renderStravaProgressInProgress(); loadLatestStravaActivity(); }
+renderPlan();
 renderProgress();
 </script>
 </body>
