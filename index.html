@@ -559,11 +559,11 @@
 
 
 <!-- PLAN TAB -->
-<div id="tab-plan" class="tab-panel">
+<div id="tab-plan" class="tab-panel active">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;">
     <div>
       <div style="font-family:var(--serif);font-size:1.4rem;font-weight:400;">Training Plan</div>
-      <div style="font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:4px;">Apr 20 — Jul 12 · Iceland departs Jul 13 · Connect Strava to auto-match activities</div>
+      
     </div>
   </div>
   <div id="planContainer"></div>
@@ -599,11 +599,13 @@ function updateFTP(v) {
 function showTab(name, evt) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
-  document.getElementById('tab-' + name).classList.add('active');
-  const e = evt || event;
-  if (e && e.target && e.target.tagName === 'BUTTON') e.target.classList.add('active');
-  // Highlight correct nav button
-  document.querySelectorAll('nav button').forEach(b => { if (b.getAttribute('onclick') && b.getAttribute('onclick').includes("'"+name+"'")) b.classList.add('active'); });
+  const panel = document.getElementById('tab-' + name);
+  if (panel) panel.classList.add('active');
+  // Highlight matching nav button
+  document.querySelectorAll('nav button').forEach(b => {
+    const oc = b.getAttribute('onclick') || '';
+    if (oc.includes("'" + name + "'") || oc.includes('"' + name + '"')) b.classList.add('active');
+  });
   if (name === 'progress') renderProgress();
   if (name === 'segments' && currentRide) renderSegments(currentRide);
   if (name === 'strava') { renderStravaButton(); if (isStravaConnected()) { renderStravaContent(); renderStravaProgress(); } }
