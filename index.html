@@ -574,1064 +574,6 @@
 <div class="toast" id="toast"></div>
 
 <script>
-// ── STRAVA CONFIG ────────────────────────────────────────────────────────
-const STRAVA_CLIENT_ID     = '226635';
-const STRAVA_CLIENT_SECRET = '02bd23b5558d74cc2c24958f18b2b77d57042247';
-const STRAVA_REDIRECT_URI  = 'https://slippitty.github.io/performance/';
-const STRAVA_SCOPE         = 'read,activity:read_all,profile:read_all';
-
-// ── STATE ─────────────────────────────────────────────────────────────────
-let ftp = parseInt(localStorage.getItem('ftp') || '149');
-let rides = JSON.parse(localStorage.getItem('rides') || '[]');
-let currentRide = null;
-let charts = {};
-
-document.getElementById('ftpInput').value = ftp;
-
-function updateFTP(v) {
-  ftp = parseInt(v) || 160;
-  localStorage.setItem('ftp', ftp);
-  if (currentRide) renderAnalysis(currentRide);
-  toast('FTP updated to ' + ftp + 'w');
-}
-
-// ── TABS ──────────────────────────────────────────────────────────────────
-function showTab(name, evt) {
-  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
-  const panel = document.getElementById('tab-' + name);
-  if (panel) panel.classList.add('active');
-  // Highlight matching nav button
-  document.querySelectorAll('nav button').forEach(b => {
-    const oc = b.getAttribute('onclick') || '';
-    if (oc.includes("'" + name + "'") || oc.includes('"' + name + '"')) b.classList.add('active');
-  });
-  if (name === 'progress') renderProgress();
-  if (name === 'segments' && currentRide) renderSegments(currentRide);
-  if (name === 'strava') { renderStravaButton(); if (isStravaConnected()) { renderStravaContent(); renderStravaProgress(); } }
-  if (name === 'progress') { setTimeout(() => { if (isStravaConnected()) { renderStravaProgress(); renderStravaProgressInProgress(); } }, 100); }
-  if (name === 'plan') renderPlan();
-  if (name === 'analysis' && currentRide) renderAnalysis(currentRide);
-}
-
-// ── TOAST ─────────────────────────────────────────────────────────────────
-function toast(msg) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 2500);
-}
-
-// ── FILE HANDLING ─────────────────────────────────────────────────────────
-const dropZone = document.getElementById('dropZone');
-dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag'); });
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag'));
-dropZone.addEventListener('drop', e => {
-  e.preventDefault();
-  dropZone.classList.remove('drag');
-  handleFiles(e.dataTransfer.files);
-});
-
-function handleFiles(files) {
-  Array.from(files).forEach(file => {
-    const ext = file.name.split('.').pop().toLowerCase();
-    document.getElementById('loadingMsg').classList.add('show');
-    const reader = new FileReader();
-    if (ext === 'gpx') {
-      reader.onload = e => { parseGPX(e.target.result, file.name); document.getElementById('loadingMsg').classList.remove('show'); };
-      reader.readAsText(file);
-    } else if (ext === 'fit') {
-      reader.onload = e => { parseFIT(e.target.result, file.name); document.getElementById('loadingMsg').classList.remove('show'); };
-      reader.readAsArrayBuffer(file);
-    } else if (ext === 'json') {
-      reader.onload = e => { parseJSON(e.target.result, file.name); document.getElementById('loadingMsg').classList.remove('show'); };
-      reader.readAsText(file);
-    }
-  });
-}
-
-// ── GPX PARSER ────────────────────────────────────────────────────────────
-function parseGPX(text, filename) {
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(text, 'application/xml');
-  const trkpts = doc.querySelectorAll('trkpt');
-  if (!trkpts.length) { toast('No track points found in GPX'); return; }
-
-  const points = [];
-  trkpts.forEach(pt => {
-    const lat = parseFloat(pt.getAttribute('lat'));
-    const lon = parseFloat(pt.getAttribute('lon'));
-    const ele = parseFloat(pt.querySelector('ele')?.textContent || 0);
-    const time = pt.querySelector('time')?.textContent;
-    const hr = parseInt(pt.querySelector('hr, heartrate, HeartRateBpm value, [*|hr]')?.textContent || 0);
-    const power = parseInt(pt.querySelector('power, [*|PowerInWatts], [*|watts]')?.textContent || 0);
-    const cad = parseInt(pt.querySelector('cad, cadence, [*|Cadence]')?.textContent || 0);
-    points.push({ lat, lon, ele, time: time ? new Date(time) : null, hr, power, cad });
-  });
-
-  processRide(points, filename, []);
-}
-
-// ── FIT PARSER — native, no dependencies ─────────────────────────────────
-function parseFIT(buffer, filename) {
-  try {
-    const bytes = new Uint8Array(buffer);
-    // Validate .FIT header
-    if (bytes[8] !== 0x2E || bytes[9] !== 0x46 || bytes[10] !== 0x49 || bytes[11] !== 0x54) {
-      toast('Not a valid FIT file'); return;
-    }
-    const headerLen = bytes[0];
-    const FIT_EPOCH = 631065600000; // ms — FIT epoch is Dec 31 1989
-
-    const defs = {};
-    const points = [];
-    const lapData = [];
-    let i = headerLen;
-    const end = bytes.length - 2;
-
-    function r8(p)  { return bytes[p]; }
-    function r16(p, be) { return be ? (bytes[p]<<8)|bytes[p+1] : bytes[p]|(bytes[p+1]<<8); }
-    function r32(p, be) {
-      let v = be
-        ? ((bytes[p]<<24)|(bytes[p+1]<<16)|(bytes[p+2]<<8)|bytes[p+3])
-        : (bytes[p]|(bytes[p+1]<<8)|(bytes[p+2]<<16)|(bytes[p+3]<<24));
-      return v >>> 0; // unsigned
-    }
-    function r32s(p, be) {
-      let v = r32(p, be);
-      return v >= 0x80000000 ? v - 0x100000000 : v;
-    }
-    function rVal(p, size, baseType, be) {
-      if (size === 1) return r8(p);
-      if (size === 2) return r16(p, be);
-      if (size === 4) {
-        // sint32 baseType = 0x85
-        return (baseType === 0x85) ? r32s(p, be) : r32(p, be);
-      }
-      // larger fields: read as array of bytes (for strings etc), just skip
-      return null;
-    }
-
-    while (i < end) {
-      const hdr = bytes[i];
-      // compressed timestamp record
-      if (hdr & 0x80) {
-        const local = (hdr >> 5) & 0x03;
-        i++;
-        if (!defs[local]) continue;
-        const [gn, fields, be] = defs[local];
-        const rec = {};
-        for (const [fn, fs, ft] of fields) {
-          if (i + fs > end) break;
-          rec[fn] = rVal(i, fs, ft, be);
-          i += fs;
-        }
-        if (gn === 20) storeRecord(rec, FIT_EPOCH, points);
-        continue;
-      }
-
-      const isDef = !!(hdr & 0x40);
-      const local = hdr & 0x0F;
-      i++;
-
-      if (isDef) {
-        i++; // reserved
-        const be = bytes[i++] === 1;
-        const gn = r16(i, be); i += 2;
-        const nf = bytes[i++];
-        const fields = [];
-        for (let f = 0; f < nf; f++) {
-          const fn = bytes[i], fs = bytes[i+1], ft = bytes[i+2]; i += 3;
-          fields.push([fn, fs, ft]);
-        }
-        defs[local] = [gn, fields, be];
-      } else {
-        if (!defs[local]) { i++; continue; }
-        const [gn, fields, be] = defs[local];
-        const rec = {};
-        for (const [fn, fs, ft] of fields) {
-          if (i + fs > end) { i += fs; continue; }
-          rec[fn] = rVal(i, fs, ft, be);
-          i += fs;
-        }
-        if (gn === 20) storeRecord(rec, FIT_EPOCH, points);   // record
-        if (gn === 19) storeLap(rec, FIT_EPOCH, lapData);      // lap
-      }
-    }
-
-    if (points.length < 5) {
-      toast('FIT file parsed but no data records found');
-      return;
-    }
-    processRide(points, filename, lapData);
-  } catch(e) {
-    console.error('FIT parse error:', e);
-    toast('FIT parse error: ' + e.message);
-  }
-}
-
-function storeRecord(rec, FIT_EPOCH, points) {
-  // field defs for global msg 20 (record):
-  // 253=timestamp, 0=lat(semicircles), 1=lon(semicircles), 2=altitude(scaled)
-  // 3=heart_rate, 4=cadence, 5=distance(m*100), 6=speed(m/s*1000), 7=power
-  // 73=enhanced_speed, 78=enhanced_altitude
-  const INVALID1 = 0xFF, INVALID2 = 0xFFFF, INVALID4 = 0xFFFFFFFF;
-  const INVALID_SINT32 = 0x7FFFFFFF;
-
-  const ts   = rec[253] !== undefined && rec[253] !== INVALID4 ? new Date(rec[253] * 1000 + FIT_EPOCH) : null;
-  const lat  = rec[0]   !== undefined && rec[0] !== INVALID_SINT32 && rec[0] !== -2147483648 ? rec[0] * (180 / 2147483648) : null;
-  const lon  = rec[1]   !== undefined && rec[1] !== INVALID_SINT32 && rec[1] !== -2147483648 ? rec[1] * (180 / 2147483648) : null;
-  const alt  = rec[78]  !== undefined && rec[78] !== INVALID2 ? rec[78] / 5 - 500
-             : rec[2]   !== undefined && rec[2]  !== INVALID2 ? rec[2] / 5 - 500 : 0;
-  const hr   = rec[3]   !== undefined && rec[3]  !== INVALID1 ? rec[3]  : 0;
-  const cad  = rec[4]   !== undefined && rec[4]  !== INVALID1 ? rec[4]  : 0;
-  const dist = rec[5]   !== undefined && rec[5]  !== INVALID4 ? rec[5] / 100 : 0;  // meters
-  const spd  = rec[73]  !== undefined && rec[73] !== INVALID2 ? rec[73] / 1000 * 2.23694
-             : rec[6]   !== undefined && rec[6]  !== INVALID2 ? rec[6]  / 1000 * 2.23694 : 0; // mph
-  const pwr  = rec[7]   !== undefined && rec[7]  !== INVALID2 ? rec[7]  : 0;
-
-  points.push({ time: ts, lat, lon, ele: alt, hr, cadence: cad,
-                distance: dist * 0.000621371, speed: spd, power: pwr });
-}
-
-function storeLap(rec, FIT_EPOCH, lapData) {
-  // global msg 19 (lap): 253=ts, 2=avg_power, 7=max_power, 9=avg_hr, 15=avg_speed
-  // 21=total_elapsed_time(ms*1000), 12=total_distance(m*100), 11=normalized_power
-  const elapsed = rec[7] !== undefined ? rec[7] / 1000 : null;   // total_elapsed_time
-  const dist    = rec[9] !== undefined ? rec[9] / 100 * 0.000621371 : null; // total_distance miles
-  const avgPwr  = rec[19] !== undefined && rec[19] !== 0xFFFF ? rec[19] : null;
-  const maxPwr  = rec[20] !== undefined && rec[20] !== 0xFFFF ? rec[20] : null;
-  const avgHR   = rec[15] !== undefined && rec[15] !== 0xFF   ? rec[15] : null;
-  const maxHR   = rec[16] !== undefined && rec[16] !== 0xFF   ? rec[16] : null;
-  const avgSpd  = rec[13] !== undefined && rec[13] !== 0xFFFF ? rec[13] / 1000 * 2.23694 : null;
-  const np      = rec[33] !== undefined && rec[33] !== 0xFFFF ? rec[33] : null;
-  lapData.push({ durSec: elapsed, dist, avgPower: avgPwr, maxPower: maxPwr,
-                 avgHR, maxHR, avgSpeed: avgSpd ? parseFloat(avgSpd.toFixed(1)) : null, np });
-}
-
-// ── JSON PARSER (Strava API format) ──────────────────────────────────────
-function parseJSON(text, filename) {
-  try {
-    const data = JSON.parse(text);
-    // Handle Strava activity JSON or streams
-    if (data.watts || data.heartrate || data.velocity_smooth) {
-      // Streams format
-      const len = (data.watts || data.heartrate || data.velocity_smooth).data.length;
-      const points = [];
-      for (let i = 0; i < len; i++) {
-        points.push({
-          power: data.watts?.data[i] || 0,
-          hr: data.heartrate?.data[i] || 0,
-          speed: data.velocity_smooth ? (data.velocity_smooth.data[i] * 2.237) : 0,
-          ele: data.altitude?.data[i] || 0,
-          lat: data.latlng?.data[i]?.[0] || 0,
-          lon: data.latlng?.data[i]?.[1] || 0,
-        });
-      }
-      processRide(points, filename);
-    } else {
-      toast('JSON format not recognized. Try GPX export from Strava.');
-    }
-  } catch(e) { toast('Could not parse JSON file'); }
-}
-
-// ── PROCESS RIDE ──────────────────────────────────────────────────────────
-function processRide(points, filename, fitLaps) {
-  if (points.length < 5) { toast('Not enough data points in file'); return; }
-
-  // Filter out zero/invalid
-  const valid = points.filter(p => p.time || p.hr || p.power || p.speed);
-
-  // Calculate metrics
-  const powers = valid.map(p => p.power || 0).filter(p => p > 0);
-  const hrs = valid.map(p => p.hr || 0).filter(h => h > 0);
-  const speeds = valid.map(p => p.speed || 0).filter(s => s > 0);
-
-  // Distance: use .distance field if available (meters→miles already done), else haversine
-  let distMiles = 0;
-  const lastDist = valid[valid.length-1]?.distance;
-  if (lastDist && lastDist > 0.1) {
-    distMiles = lastDist;
-  } else {
-    for (let i = 1; i < valid.length; i++) {
-      if (valid[i].lat && valid[i-1].lat) {
-        distMiles += haversine(valid[i-1].lat, valid[i-1].lon, valid[i].lat, valid[i].lon);
-      }
-    }
-  }
-  if (distMiles < 0.1 && speeds.length > 0) {
-    distMiles = (speeds.reduce((a,b)=>a+b,0) / speeds.length) * (valid.length / 3600);
-  }
-
-  // Duration
-  let durationSec = 0;
-  if (valid[0]?.time && valid[valid.length-1]?.time) {
-    durationSec = (valid[valid.length-1].time - valid[0].time) / 1000;
-  } else {
-    durationSec = valid.length; // assume 1 sec per point
-  }
-
-  const avgPower = powers.length ? Math.round(powers.reduce((a,b)=>a+b,0)/powers.length) : null;
-  const maxPower = powers.length ? Math.max(...powers) : null;
-  const avgHR = hrs.length ? Math.round(hrs.reduce((a,b)=>a+b,0)/hrs.length) : null;
-  const maxHR = hrs.length ? Math.max(...hrs) : null;
-  const avgSpeed = speeds.length ? (speeds.reduce((a,b)=>a+b,0)/speeds.length) : null;
-
-  // NP (Normalized Power) — 30sec rolling avg^4
-  let np = null;
-  if (powers.length > 30) {
-    const window = 30;
-    const rolling = [];
-    for (let i = window; i < powers.length; i++) {
-      const slice = powers.slice(i-window, i);
-      rolling.push(slice.reduce((a,b)=>a+b,0)/window);
-    }
-    const fourth = rolling.map(p => Math.pow(p,4));
-    np = Math.round(Math.pow(fourth.reduce((a,b)=>a+b,0)/fourth.length, 0.25));
-  }
-
-  // IF (Intensity Factor)
-  const IF = np && ftp ? (np / ftp).toFixed(2) : null;
-
-  // TSS
-  const tss = np && ftp && IF ? Math.round((durationSec * np * parseFloat(IF)) / (ftp * 3600) * 100) : null;
-
-  // Zone time distribution
-  const zones = calcZones(powers, ftp);
-
-  // Detect laps (simple: split into equal segments of ~PP loop distance ~3.35mi)
-  let laps;
-  if (fitLaps && fitLaps.length > 1) {
-    laps = fitLaps.map((lap, idx) => ({ num: idx+1, ...lap }));
-  } else {
-    laps = detectLaps(valid, distMiles);
-  }
-
-  const hillPasses = detectHillPasses(valid, 54); // 54kg / 119lbs // 54kg body weight
-
-  const ride = {
-    id: Date.now(),
-    filename,
-    date: valid[0]?.time ? valid[0].time.toISOString() : new Date().toISOString(),
-    points: valid,
-    metrics: { avgPower, maxPower, np, IF, tss, avgHR, maxHR, avgSpeed, distMiles: parseFloat(distMiles.toFixed(2)), durationSec, zones },
-    laps,
-    hillPasses,
-  };
-
-  currentRide = ride;
-
-  // Save to storage (keep last 50 rides, strip raw points for storage)
-  const rideForStorage = { ...ride, points: [] }; // don't store all points
-  // Store summary only
-  const existing = rides.findIndex(r => r.filename === filename);
-  if (existing >= 0) rides[existing] = rideForStorage;
-  else rides.push(rideForStorage);
-  if (rides.length > 50) rides = rides.slice(-50);
-  localStorage.setItem('rides', JSON.stringify(rides));
-
-  renderAnalysis(ride);
-  renderSegments(ride);
-  renderProgress();
-  renderUploadedList();
-
-  toast('Loaded: ' + filename);
-  // Switch to analysis
-  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
-  document.getElementById('tab-analysis').classList.add('active');
-  document.querySelectorAll('nav button')[1].classList.add('active');
-}
-
-// ── HAVERSINE ─────────────────────────────────────────────────────────────
-function haversine(lat1, lon1, lat2, lon2) {
-  const R = 3958.8; // miles
-  const dLat = (lat2-lat1) * Math.PI/180;
-  const dLon = (lon2-lon1) * Math.PI/180;
-  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-}
-
-// ── PP HILL DETECTION ──────────────────────────────────────────────────────
-// Calibrated against GPS data from multiple PP rides.
-// The hill start is around lat 40.6620, alt 15-30m (varies by loop direction).
-// Peak is around lat 40.670-40.671, alt 40-54m.
-// Detects each pass by finding northbound crossing of lat 40.6622 below alt 32m,
-// then tracking to the altitude peak.
-function detectHillPasses(points, bodyWeightKg) {
-  const passes = [];
-  const wkg = bodyWeightKg || 54;
-
-  // Find all northbound crossings of lat ~40.662 with low altitude
-  // These are the hill entry points
-  let lastLat = null;
-  const entryIndices = [];
-  for (let i = 1; i < points.length; i++) {
-    const p = points[i];
-    if (!p.lat || !p.ele) continue;
-    // Northbound crossing: lat crosses 40.6621, alt < 32m, not too slow (not stopped)
-    if (lastLat && lastLat < 40.6622 && p.lat >= 40.6622 && p.ele < 32 && p.speed > 3) {
-      // Debounce: only if last entry was > 200 points ago
-      if (!entryIndices.length || i - entryIndices[entryIndices.length-1] > 200) {
-        entryIndices.push(i);
-      }
-    }
-    lastLat = p.lat;
-  }
-
-  // For each entry, find the altitude peak within the next 400 points
-  for (const si of entryIndices) {
-    const window = points.slice(si, Math.min(si + 450, points.length));
-    if (window.length < 30) continue;
-
-    // Find peak altitude index
-    let peakIdx = 0;
-    for (let j = 1; j < window.length; j++) {
-      if ((window[j].ele || 0) > (window[peakIdx].ele || 0)) peakIdx = j;
-    }
-
-    const chunk = window.slice(0, peakIdx + 1);
-    if (chunk.length < 30) continue;
-
-    const start = chunk[0];
-    const peak  = chunk[chunk.length - 1];
-    const altGain = (peak.ele || 0) - (start.ele || 0);
-    if (altGain < 10) continue; // not a real climb
-
-    const durSec = start.time && peak.time ? (peak.time - start.time) / 1000 : chunk.length;
-    if (durSec < 60 || durSec > 600) continue; // sanity check
-
-    const distMi = peak.distance && start.distance ? peak.distance - start.distance : 0.5;
-    if (distMi < 0.3 || distMi > 1.2) continue;
-
-    const pows = chunk.map(x => x.power).filter(x => x > 20);
-    const hrs  = chunk.map(x => x.hr).filter(x => x > 60);
-    const spds = chunk.map(x => x.speed).filter(x => x > 0);
-
-    const avgPow = pows.length ? Math.round(pows.reduce((a,b)=>a+b,0)/pows.length) : null;
-    const avgHR  = hrs.length  ? Math.round(hrs.reduce((a,b)=>a+b,0)/hrs.length)   : null;
-    const avgSpd = spds.length ? parseFloat((spds.reduce((a,b)=>a+b,0)/spds.length).toFixed(1)) : null;
-    const maxPow = pows.length ? Math.max(...pows) : null;
-    const vam    = altGain > 0 && durSec > 0 ? Math.round((altGain / durSec) * 3600) : null;
-    const wPerKg = avgPow ? parseFloat((avgPow / wkg).toFixed(2)) : null;
-    const cardiacCost = avgPow && avgHR ? parseFloat((avgHR / avgPow).toFixed(2)) : null;
-
-    passes.push({
-      num: passes.length + 1,
-      durSec: Math.round(durSec),
-      distMi: parseFloat(distMi.toFixed(2)),
-      altGain: Math.round(altGain),
-      avgPower: avgPow, maxPower: maxPow,
-      avgHR, avgSpeed: avgSpd,
-      vam, wPerKg, cardiacCost,
-      gradient: distMi > 0 ? parseFloat(((altGain / (distMi * 1609.34)) * 100).toFixed(1)) : null,
-    });
-  }
-  return passes;
-}
-
-// ── ZONE CALC ─────────────────────────────────────────────────────────────
-function calcZones(powers, ftp) {
-  const zones = [0,0,0,0,0,0];
-  powers.forEach(p => {
-    const pct = p / ftp;
-    if (pct < 0.56) zones[0]++;
-    else if (pct < 0.76) zones[1]++;
-    else if (pct < 0.91) zones[2]++;
-    else if (pct < 1.06) zones[3]++;
-    else if (pct < 1.21) zones[4]++;
-    else zones[5]++;
-  });
-  return zones;
-}
-
-// ── LAP DETECTION ─────────────────────────────────────────────────────────
-function detectLaps(points, totalDist) {
-  // Detect laps by looking for return to start GPS coords, or split by known PP loop ~3.35mi
-  const LAP_DIST = 3.35; // PP loop miles
-  const laps = [];
-
-  if (totalDist < 1) return laps;
-
-  const numLaps = Math.round(totalDist / LAP_DIST);
-  if (numLaps < 1) return laps;
-
-  const chunkSize = Math.floor(points.length / numLaps);
-  for (let i = 0; i < numLaps; i++) {
-    const chunk = points.slice(i * chunkSize, (i+1) * chunkSize);
-    const powers = chunk.map(p => p.power||0).filter(p=>p>0);
-    const hrs = chunk.map(p => p.hr||0).filter(h=>h>0);
-    const speeds = chunk.map(p => p.speed||0).filter(s=>s>0);
-
-    let lapDist = 0;
-    for (let j = 1; j < chunk.length; j++) {
-      if (chunk[j].lat && chunk[j-1].lat) lapDist += haversine(chunk[j-1].lat, chunk[j-1].lon, chunk[j].lat, chunk[j].lon);
-    }
-    if (lapDist < 0.1 && speeds.length) lapDist = (speeds.reduce((a,b)=>a+b,0)/speeds.length) * (chunk.length/3600);
-
-    let durSec = 0;
-    if (chunk[0]?.time && chunk[chunk.length-1]?.time) durSec = (chunk[chunk.length-1].time - chunk[0].time)/1000;
-    else durSec = chunk.length;
-
-    laps.push({
-      num: i+1,
-      avgPower: powers.length ? Math.round(powers.reduce((a,b)=>a+b,0)/powers.length) : null,
-      maxPower: powers.length ? Math.max(...powers) : null,
-      avgHR: hrs.length ? Math.round(hrs.reduce((a,b)=>a+b,0)/hrs.length) : null,
-      avgSpeed: speeds.length ? parseFloat((speeds.reduce((a,b)=>a+b,0)/speeds.length).toFixed(1)) : null,
-      dist: parseFloat(lapDist.toFixed(2)),
-      durSec: Math.round(durSec),
-    });
-  }
-
-  // Try to find the hill segment within first lap (PP hill is ~0.48mi ~2:35 at ~5% grade)
-  // Mark the best hill candidate
-  return laps;
-}
-
-// ── RENDER ANALYSIS ───────────────────────────────────────────────────────
-function renderAnalysis(ride) {
-  const { metrics, points, filename } = ride;
-  document.getElementById('analysisEmpty').style.display = 'none';
-  document.getElementById('analysisContent').style.display = 'block';
-
-  const fmt = (v, u='') => v !== null && v !== undefined ? v + u : '—';
-  const fmtTime = s => {
-    if (!s) return '—';
-    const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = Math.floor(s%60);
-    return h > 0 ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}` : `${m}:${String(sec).padStart(2,'0')}`;
-  };
-
-  const statDefs = [
-    { label: 'Distance', value: fmt(metrics.distMiles,'mi'), sub: '', color: 'var(--accent)' },
-    { label: 'Duration', value: fmtTime(metrics.durationSec), sub: '', color: 'var(--accent2)' },
-    { label: 'Avg Power', value: fmt(metrics.avgPower,'w'), sub: metrics.avgPower ? Math.round(metrics.avgPower/ftp*100)+'% FTP' : '', color: 'var(--accent)' },
-    { label: 'Norm Power', value: fmt(metrics.np,'w'), sub: metrics.IF ? 'IF: '+metrics.IF : '', color: 'var(--accent3)' },
-    { label: 'Peak Power', value: fmt(metrics.maxPower,'w'), sub: metrics.maxPower ? Math.round(metrics.maxPower/ftp*100)+'% FTP' : '', color: 'var(--accent)' },
-    { label: 'TSS', value: fmt(metrics.tss), sub: 'Training stress', color: 'var(--accent3)' },
-    { label: 'Avg HR', value: fmt(metrics.avgHR,'bpm'), sub: '', color: 'var(--accent2)' },
-    { label: 'Max HR', value: fmt(metrics.maxHR,'bpm'), sub: '', color: 'var(--danger)' },
-    { label: 'Avg Speed', value: metrics.avgSpeed ? parseFloat(metrics.avgSpeed).toFixed(1)+'mph' : '—', sub: '', color: 'var(--accent2)' },
-  ];
-
-  const grid = document.getElementById('statsGrid');
-  grid.innerHTML = statDefs.map(s => `
-    <div class="stat-card" style="--accent-color:${s.color}">
-      <div class="stat-label">${s.label}</div>
-      <div class="stat-value">${s.value}</div>
-      ${s.sub ? `<div class="stat-sub">${s.sub}</div>` : ''}
-    </div>
-  `).join('');
-
-  // Downsample points for charts
-  const ds = downsample(points, 300);
-  const labels = ds.map((p,i) => {
-    if (p.time) { const m = Math.floor((p.time - points[0].time)/60000); return m+'m'; }
-    return Math.round(i * metrics.durationSec / ds.length / 60) + 'm';
-  });
-
-  destroyChart('powerChart');
-  destroyChart('hrChart');
-  destroyChart('speedChart');
-  destroyChart('scatterChart');
-
-  const chartDefaults = {
-    responsive: true, maintainAspectRatio: false,
-    plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1e2028', titleColor: '#e8eaf0', bodyColor: '#6b7080', borderColor: '#2a2d35', borderWidth: 1 } },
-    scales: {
-      x: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 }, maxTicksLimit: 8 }, grid: { color: '#1e2028' } },
-      y: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } }
-    }
-  };
-
-  if (ds.some(p => p.power > 0)) {
-    charts.powerChart = new Chart(document.getElementById('powerChart'), {
-      type: 'line',
-      data: {
-        labels,
-        datasets: [{
-          data: ds.map(p => p.power||0),
-          borderColor: '#c8f060', borderWidth: 1.5,
-          backgroundColor: 'rgba(200,240,96,0.08)',
-          fill: true, pointRadius: 0, tension: 0.3
-        }, {
-          data: Array(labels.length).fill(ftp),
-          borderColor: 'rgba(200,240,96,0.3)', borderWidth: 1,
-          borderDash: [4,4], pointRadius: 0, fill: false,
-          label: 'FTP'
-        }]
-      },
-      options: { ...chartDefaults }
-    });
-  }
-
-  if (ds.some(p => p.hr > 0)) {
-    charts.hrChart = new Chart(document.getElementById('hrChart'), {
-      type: 'line',
-      data: {
-        labels,
-        datasets: [{
-          data: ds.map(p => p.hr||null),
-          borderColor: '#f06060', borderWidth: 1.5,
-          backgroundColor: 'rgba(240,96,96,0.08)',
-          fill: true, pointRadius: 0, tension: 0.4, spanGaps: true
-        }]
-      },
-      options: { ...chartDefaults }
-    });
-  }
-
-  if (ds.some(p => p.speed > 0)) {
-    charts.speedChart = new Chart(document.getElementById('speedChart'), {
-      type: 'line',
-      data: {
-        labels,
-        datasets: [{
-          data: ds.map(p => p.speed ? parseFloat(p.speed.toFixed(1)) : null),
-          borderColor: '#60c8f0', borderWidth: 1.5,
-          backgroundColor: 'rgba(96,200,240,0.08)',
-          fill: true, pointRadius: 0, tension: 0.3, spanGaps: true
-        }]
-      },
-      options: { ...chartDefaults }
-    });
-  }
-
-  // Scatter: power vs HR
-  if (ds.some(p => p.power > 0 && p.hr > 0)) {
-    const scatter = ds.filter(p => p.power > 20 && p.hr > 60).map(p => ({ x: p.power, y: p.hr }));
-    charts.scatterChart = new Chart(document.getElementById('scatterChart'), {
-      type: 'scatter',
-      data: {
-        datasets: [{
-          data: scatter,
-          backgroundColor: 'rgba(200,240,96,0.4)',
-          pointRadius: 3, pointHoverRadius: 5
-        }]
-      },
-      options: {
-        ...chartDefaults,
-        scales: {
-          x: { title: { display: true, text: 'Power (w)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } },
-          y: { title: { display: true, text: 'Heart Rate (bpm)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } }
-        }
-      }
-    });
-  }
-
-  // Zone bars
-  const zoneColors = ['#6b7080','#60c8f0','#c8f060','#f0a060','#f06060','#ff3030'];
-  const zoneNames = ['Z1 Recovery','Z2 Endurance','Z3 Tempo','Z4 Threshold','Z5 VO2max','Z6 Anaerobic'];
-  const total = metrics.zones.reduce((a,b)=>a+b,0) || 1;
-  document.getElementById('zoneBars').innerHTML = metrics.zones.map((z,i) => {
-    const pct = Math.round(z/total*100);
-    return `
-      <div class="zone-bar-row">
-        <div class="zone-bar-label" style="color:${zoneColors[i]};font-size:9px;">${zoneNames[i].split(' ')[0]}</div>
-        <div class="zone-bar-track">
-          <div class="zone-bar-fill" style="width:${pct}%;background:${zoneColors[i]}"></div>
-        </div>
-        <div class="zone-bar-pct">${pct}%</div>
-      </div>
-    `;
-  }).join('');
-}
-
-// ── RENDER SEGMENTS ───────────────────────────────────────────────────────
-function renderSegments(ride) {
-  const stravaBtn = document.getElementById('segStravaBtn');
-  if (stravaBtn) stravaBtn.style.display = isStravaConnected() ? 'block' : 'none';
-  if (!ride) return;
-  document.getElementById('segmentsEmpty').style.display = 'none';
-  document.getElementById('segmentsContent').style.display = 'block';
-  // Clear any previously appended hill pass tables
-  const existing = document.querySelectorAll('.hill-passes-section');
-  existing.forEach(el => el.remove());
-
-  const { laps, metrics } = ride;
-  const fmtTime = s => { const m=Math.floor(s/60),sec=Math.floor(s%60); return `${m}:${String(sec).padStart(2,'0')}`; };
-
-  // Hill passes auto-detected from GPS
-  const passes = ride.hillPasses || [];
-
-  // Benchmark targets
-  const benchTargets = [
-    { label: 'Baseline', target: 155, targetSpeed: 11.2, targetHR: 144, targetWatts: 168 },
-    { label: 'Test 2 — May 27', target: 140, targetSpeed: 12.0, targetHR: 142, targetWatts: 178 },
-    { label: 'Test 3 — Jun 12', target: 130, targetSpeed: 13.0, targetHR: 140, targetWatts: 188 },
-    { label: 'Final — Jul 5', target: 120, targetSpeed: 13.8, targetHR: 138, targetWatts: 198 },
-  ];
-
-  // Best pass this ride
-  const bestPass = passes.length ? passes.reduce((b,p) => p.durSec < b.durSec ? p : b, passes[0]) : null;
-
-  document.getElementById('benchmarkRow').innerHTML = benchTargets.map((b, i) => {
-    const isThis = i === 0 && bestPass;
-    return `
-      <div class="bench-card ${isThis ? 'achieved' : 'pending'}">
-        <div class="date">${b.label}</div>
-        <div class="time">${isThis ? fmtTime(bestPass.durSec) : 'sub ' + fmtTime(b.target)}</div>
-        <div class="meta">${isThis ? (bestPass.avgSpeed||'—')+'mph · '+(bestPass.avgHR||'—')+'bpm' : '>'+b.targetSpeed+'mph · <'+b.targetHR+'bpm'}</div>
-        <div class="target">target: ${fmtTime(b.target)} · ${b.targetWatts}w</div>
-      </div>
-    `;
-  }).join('');
-
-  // Hill passes table
-  if (passes.length) {
-    const bestDur = Math.min(...passes.map(p => p.durSec));
-    const hillTableHTML = `
-      <div class="section-title" style="margin-top:28px;margin-bottom:16px;">
-        PP Hill passes — ${passes.length} detected this ride
-        <span style="color:var(--muted);font-weight:normal;margin-left:12px;">0.48mi @ ~3–5% · auto-detected from GPS</span>
-      </div>
-      <div class="chart-card" style="margin-bottom:16px;">
-        <table class="seg-table">
-          <thead>
-            <tr>
-              <th>Pass</th><th>Time</th><th>Avg Power</th><th>Peak Power</th>
-              <th>w/kg</th><th>Avg HR</th><th>Avg Speed</th><th>VAM</th><th>HR/watt</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${passes.map(p => `
-              <tr>
-                <td>Pass ${p.num}</td>
-                <td class="${p.durSec === bestDur ? 'seg-best' : ''}">${fmtTime(p.durSec)}</td>
-                <td>${p.avgPower ? p.avgPower+'w' : '—'}</td>
-                <td>${p.maxPower ? p.maxPower+'w' : '—'}</td>
-                <td><span class="pill ${p.wPerKg >= 3 ? '' : p.wPerKg >= 2.5 ? 'blue' : 'orange'}">${p.wPerKg||'—'}</span></td>
-                <td>${p.avgHR ? p.avgHR+'bpm' : '—'}</td>
-                <td>${p.avgSpeed ? p.avgSpeed+'mph' : '—'}</td>
-                <td>${p.vam ? p.vam+'m/hr' : '—'}</td>
-                <td>${p.cardiacCost||'—'}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      </div>
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 18px;font-size:12px;color:var(--muted);line-height:1.8;">
-        <strong style="color:var(--text);">Climbing metrics explained</strong><br>
-        <strong style="color:var(--accent);">VAM</strong> (Velocità Ascensionale Media) — vertical meters climbed per hour. Pro climbers: 1200–1600. Strong amateur: 600–900. Your target by Iceland: 600+.<br>
-        <strong style="color:var(--accent);">w/kg</strong> — power relative to body weight on the climb. Most important climbing metric. Target: 3.0+ by Iceland.<br>
-        <strong style="color:var(--accent);">HR/watt</strong> — cardiac cost. Lower = more efficient heart. This should drop over the training block as fitness improves.
-      </div>
-    `;
-    const hillDiv = document.createElement('div');
-    hillDiv.className = 'hill-passes-section';
-    hillDiv.innerHTML = hillTableHTML;
-    document.getElementById('segmentsContent').appendChild(hillDiv);
-  }
-
-  // Lap table
-  if (!laps.length) {
-    document.getElementById('segTableBody').innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:24px;">No lap data detected — try a file with lap markers</td></tr>';
-    return;
-  }
-
-  const bestLapPower = laps.reduce((best, l) => l.avgPower > (best?.avgPower||0) ? l : best, null);
-  const bestLapTime = laps.reduce((best, l) => l.durSec < (best?.durSec||Infinity) ? l : best, null);
-
-  document.getElementById('segTableBody').innerHTML = laps.map((lap, i) => {
-    const pctFTP = lap.avgPower ? Math.round(lap.avgPower/ftp*100) : null;
-    const isBestPower = lap === bestLapPower;
-    const isBestTime = lap === bestLapTime;
-    const zone = lap.avgPower ? getZoneName(lap.avgPower, ftp) : '—';
-    return `
-      <tr>
-        <td><span class="seg-name">Lap ${lap.num}</span></td>
-        <td class="${isBestTime ? 'seg-best' : ''}">${fmtTime(lap.durSec)}</td>
-        <td class="${isBestPower ? 'seg-best' : ''}">${lap.avgPower ? lap.avgPower+'w' : '—'}</td>
-        <td>${pctFTP ? '<span class="pill">'+pctFTP+'%</span>' : '—'}</td>
-        <td>${lap.avgHR ? lap.avgHR+'bpm' : '—'}</td>
-        <td>${lap.avgSpeed ? lap.avgSpeed+'mph' : '—'}</td>
-        <td>${lap.maxPower ? lap.maxPower+'w' : '—'}</td>
-        <td><span class="pill ${pctFTP > 90 ? 'orange' : pctFTP > 75 ? 'blue' : ''}">${zone}</span></td>
-      </tr>
-    `;
-  }).join('');
-
-  // Lap chart
-  destroyChart('lapChart');
-  if (laps.length && laps.some(l => l.avgPower)) {
-    charts.lapChart = new Chart(document.getElementById('lapChart'), {
-      type: 'bar',
-      data: {
-        labels: laps.map(l => 'Lap ' + l.num),
-        datasets: [{
-          label: 'Avg Power (w)',
-          data: laps.map(l => l.avgPower || 0),
-          backgroundColor: laps.map(l => l === bestLapPower ? '#c8f060' : 'rgba(200,240,96,0.3)'),
-          borderRadius: 4,
-        }, {
-          label: 'Avg HR (bpm)',
-          data: laps.map(l => l.avgHR || 0),
-          backgroundColor: 'rgba(240,96,96,0.4)',
-          borderRadius: 4,
-          yAxisID: 'y1',
-        }]
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { labels: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }, tooltip: { backgroundColor: '#1e2028', titleColor: '#e8eaf0', bodyColor: '#6b7080', borderColor: '#2a2d35', borderWidth: 1 } },
-        scales: {
-          x: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } },
-          y: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } },
-          y1: { position: 'right', ticks: { color: '#f06060', font: { family: 'DM Mono', size: 10 } }, grid: { display: false } }
-        }
-      }
-    });
-  }
-}
-
-// ── RENDER PROGRESS ───────────────────────────────────────────────────────
-function renderProgress() {
-  const stravaBtn = document.getElementById('progStravaBtn');
-  if (stravaBtn) stravaBtn.style.display = 'none';
-
-  // Prefer Strava data if connected
-  const stravaActivities = JSON.parse(localStorage.getItem('strava_activities') || '[]');
-  const localRides = rides.filter(r => r.metrics);
-
-  // Merge: use Strava rides as base (they have more history), supplement with local FIT data
-  let allRides = [];
-  if (stravaActivities.length) {
-    // Only include rides, not runs
-    allRides = stravaActivities
-      .filter(a => !a.type || a.type === 'ride' || !['run','walk','hike'].includes((a.type||'').toLowerCase()))
-      .map(a => ({
-        date: a.date,
-        filename: a.name,
-        metrics: {
-          distMiles: a.distMiles,
-          durationSec: a.durationSec,
-          avgPower: a.avgPower,
-          np: a.np,
-          avgHR: a.avgHR,
-          maxHR: a.maxHR,
-          avgSpeed: a.avgSpeed,
-          elevGainFt: a.elevGainFt,
-          tss: null,
-          zones: [0,0,0,0,0,0],
-        },
-        hillPasses: [],
-        id: a.id,
-      }));
-  } else {
-    allRides = localRides;
-  }
-
-  if (allRides.length < 1) {
-    document.getElementById('progressEmpty').style.display = 'block';
-    document.getElementById('progressContent').style.display = 'none';
-    return;
-  }
-  document.getElementById('progressEmpty').style.display = 'none';
-  document.getElementById('progressContent').style.display = 'block';
-
-  const sorted = [...allRides].sort((a,b) => new Date(a.date) - new Date(b.date));
-  const labels = sorted.map(r => {
-    const d = new Date(r.date);
-    const dateStr = d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
-    const timeStr = d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true});
-    return dateStr + ' ' + timeStr;
-  });
-
-  const progressChartOpts = {
-    responsive: true, maintainAspectRatio: false,
-    plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1e2028', titleColor: '#e8eaf0', bodyColor: '#6b7080', borderColor: '#2a2d35', borderWidth: 1 } },
-    scales: {
-      x: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } },
-      y: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } }
-    }
-  };
-
-  ['progressPowerChart','progressHRChart','progressHillChart','progressDistChart'].forEach(destroyChart);
-
-  charts.progressPowerChart = new Chart(document.getElementById('progressPowerChart'), {
-    type: 'line',
-    data: { labels, datasets: [{ data: sorted.map(r => r.metrics.np || r.metrics.avgPower), borderColor: '#c8f060', backgroundColor: 'rgba(200,240,96,0.1)', fill: true, tension: 0.3, pointRadius: 4, pointBackgroundColor: '#c8f060' }] },
-    options: progressChartOpts
-  });
-
-  charts.progressHRChart = new Chart(document.getElementById('progressHRChart'), {
-    type: 'line',
-    data: { labels, datasets: [{ data: sorted.map(r => r.metrics.avgHR), borderColor: '#f06060', backgroundColor: 'rgba(240,96,96,0.1)', fill: true, tension: 0.3, pointRadius: 4, pointBackgroundColor: '#f06060' }] },
-    options: progressChartOpts
-  });
-
-  charts.progressDistChart = new Chart(document.getElementById('progressDistChart'), {
-    type: 'bar',
-    data: { labels, datasets: [{ data: sorted.map(r => r.metrics.distMiles), backgroundColor: 'rgba(96,200,240,0.5)', borderRadius: 4 }] },
-    options: progressChartOpts
-  });
-
-  // Elevation gain chart
-  const elevData = sorted.map(r => r.metrics?.elevGainFt || r.elevGainFt || null);
-  if (elevData.some(v => v)) {
-    destroyChart('progressElevChart');
-    const elevCanvas = document.getElementById('progressElevChart');
-    if (elevCanvas) {
-      charts.progressElevChart = new Chart(elevCanvas, {
-        type: 'bar',
-        data: { labels, datasets: [{ data: elevData, backgroundColor: 'rgba(240,160,96,0.5)', borderRadius: 4 }] },
-        options: { ...progressChartOpts, scales: { ...progressChartOpts.scales,
-          y: { ...progressChartOpts.scales.y, title: { display: true, text: 'ft', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }
-        }}
-      });
-    }
-  }
-
-  // VAM trend — best hill pass per ride
-  const vamData = sorted.map(r => {
-    if (!r.hillPasses || !r.hillPasses.length) return null;
-    return Math.max(...r.hillPasses.map(p => p.vam).filter(Boolean));
-  });
-  if (vamData.some(v => v !== null)) {
-    destroyChart('progressVAMChart');
-    const vamCanvas = document.getElementById('progressVAMChart');
-    if (vamCanvas) {
-      charts.progressVAMChart = new Chart(vamCanvas, {
-        type: 'line',
-        data: { labels, datasets: [{
-          data: vamData,
-          borderColor: '#f0a060', backgroundColor: 'rgba(240,160,96,0.1)',
-          fill: true, tension: 0.3, pointRadius: 5, pointBackgroundColor: '#f0a060',
-          spanGaps: true
-        }] },
-        options: { ...progressChartOpts, scales: { ...progressChartOpts.scales,
-          y: { ...progressChartOpts.scales.y, title: { display: true, text: 'm/hr', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }
-        }}
-      });
-    }
-
-    // w/kg trend
-    const wkgData = sorted.map(r => {
-      if (!r.hillPasses || !r.hillPasses.length) return null;
-      return Math.max(...r.hillPasses.map(p => p.wPerKg).filter(Boolean));
-    });
-    destroyChart('progressWkgChart');
-    const wkgCanvas = document.getElementById('progressWkgChart');
-    if (wkgCanvas) {
-      charts.progressWkgChart = new Chart(wkgCanvas, {
-        type: 'line',
-        data: { labels, datasets: [{
-          data: wkgData,
-          borderColor: '#c8f060', backgroundColor: 'rgba(200,240,96,0.1)',
-          fill: true, tension: 0.3, pointRadius: 5, pointBackgroundColor: '#c8f060',
-          spanGaps: true
-        }] },
-        options: { ...progressChartOpts, scales: { ...progressChartOpts.scales,
-          y: { ...progressChartOpts.scales.y, title: { display: true, text: 'w/kg', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }
-        }}
-      });
-    }
-  }
-
-  // Hill chart — placeholder with targets
-  const hillTargets = [{ x: 'Apr 25', y: 155 }, { x: 'May 27', y: 140 }, { x: 'Jun 12', y: 130 }, { x: 'Jul 5', y: 120 }];
-  charts.progressHillChart = new Chart(document.getElementById('progressHillChart'), {
-    type: 'line',
-    data: {
-      labels: hillTargets.map(h=>h.x),
-      datasets: [{
-        label: 'Target',
-        data: hillTargets.map(h=>h.y),
-        borderColor: 'rgba(200,240,96,0.3)', borderDash: [4,4],
-        pointRadius: 4, fill: false, tension: 0
-      }]
-    },
-    options: { ...progressChartOpts, scales: { ...progressChartOpts.scales, y: { ...progressChartOpts.scales.y, reverse: true, title: { display: true, text: 'seconds', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } } } }
-  });
-
-  // All rides list
-  const fmtTime = s => { const h=Math.floor(s/3600),m=Math.floor((s%3600)/60); return h>0?`${h}h ${m}m`:`${m}m`; };
-  const outdoorSorted = sorted.filter(r => !r.zwift).reverse();
-  const zwiftSorted   = sorted.filter(r =>  r.zwift).reverse();
-  document.getElementById('allRidesList').innerHTML = outdoorSorted.map(r => `
-    <div class="ride-row">
-      <div class="ride-date">${(() => { const d = new Date(r.date); return d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}) + ' ' + d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true}); })()}</div>
-      <div class="ride-name">${r.filename.replace(/\.(fit|gpx|json)$/i,'')}</div>
-      <div class="ride-stat">${r.metrics.distMiles||'—'}<span>miles</span></div>
-      <div class="ride-stat">${fmtTime(r.metrics.durationSec)}<span>time</span></div>
-      <div class="ride-stat">${r.metrics.avgPower||'—'}<span>avg w</span></div>
-      <div class="ride-stat">${r.metrics.avgHR||'—'}<span>avg bpm</span></div>
-      <div class="ride-stat">${r.metrics.tss||'—'}<span>TSS</span></div>
-      <button class="del-btn" onclick="deleteRide(${r.id})" title="Remove">×</button>
-    </div>
-  `).join('') || '<div style="color:var(--muted);text-align:center;padding:24px;font-family:var(--mono);font-size:12px;">No rides yet</div>';
-
-  // Zwift rides list
-  const zwiftListEl = document.getElementById('zwiftRidesList');
-  if (zwiftListEl) {
-    zwiftListEl.innerHTML = zwiftSorted.map(r => `
-    <div class="ride-row">
-      <div class="ride-date">${(() => { const d = new Date(r.date); return d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}); })()}</div>
-      <div class="ride-name">${(r.filename||r.metrics?.name||'').replace(/\\.(fit|gpx|json)$/i,'')}</div>
-      <div class="ride-stat">${r.metrics?.distMiles||'—'}<span>miles</span></div>
-      <div class="ride-stat">${fmtTime(r.metrics?.durationSec)}<span>time</span></div>
-      <div class="ride-stat">${r.metrics?.np||r.metrics?.avgPower||'—'}<span>NP</span></div>
-      <div class="ride-stat">${r.metrics?.avgHR||'—'}<span>bpm</span></div>
-      <div class="ride-stat">—<span>TSS</span></div>
-    </div>
-  `).join('') || '<div style="color:var(--muted);padding:12px;font-family:var(--mono);font-size:12px;">No Zwift rides yet</div>';
-  }
-}
-
-function deleteRide(id) {
-  rides = rides.filter(r => r.id !== id);
-  localStorage.setItem('rides', JSON.stringify(rides));
-  renderProgress();
-  renderUploadedList();
-  toast('Ride removed');
-}
-
-function renderUploadedList() {
-  const recent = [...rides].sort((a,b) => new Date(b.date)-new Date(a.date)).slice(0,5);
-  const fmtTime = s => { const h=Math.floor(s/3600),m=Math.floor((s%3600)/60); return h>0?`${h}h ${m}m`:`${m}m`; };
-  document.getElementById('uploadedList').innerHTML = recent.length ? `
-    <div class="section-title">Recent uploads</div>
-    ${recent.map(r => `
-      <div class="ride-row" onclick="loadStoredRide(${r.id})" style="cursor:pointer;">
-        <div class="ride-date">${new Date(r.date).toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div>
-        <div class="ride-name">${r.filename}</div>
-        <div class="ride-stat">${r.metrics?.distMiles||'—'}<span>mi</span></div>
-        <div class="ride-stat">${r.metrics?.durationSec ? fmtTime(r.metrics.durationSec) : '—'}<span>time</span></div>
-        <div class="ride-stat">${r.metrics?.avgPower||'—'}<span>avg w</span></div>
-        <div class="ride-stat">${r.metrics?.avgHR||'—'}<span>bpm</span></div>
-        <div class="ride-stat">${r.metrics?.tss||'—'}<span>TSS</span></div>
-        <button class="del-btn" onclick="event.stopPropagation();deleteRide(${r.id})" title="Remove">×</button>
-      </div>
-    `).join('')}
-  ` : '';
-}
-
-function loadStoredRide(id) {
-  toast('Raw data not stored — re-upload the file to view analysis');
-}
-
-// ── HELPERS ───────────────────────────────────────────────────────────────
-function downsample(arr, n) {
-  if (arr.length <= n) return arr;
-  const step = arr.length / n;
-  return Array.from({length: n}, (_,i) => arr[Math.floor(i*step)]);
-}
-
-function destroyChart(id) {
-  if (charts[id]) { charts[id].destroy(); delete charts[id]; }
-}
-
-function getZoneName(power, ftp) {
-  const pct = power / ftp;
-  if (pct < 0.56) return 'Z1';
-  if (pct < 0.76) return 'Z2';
-  if (pct < 0.91) return 'Z3';
-  if (pct < 1.06) return 'Z4';
-  if (pct < 1.21) return 'Z5';
-  return 'Z6';
-}
-
-
 const TRAINING_PLAN = [
   // ── WEEK 1 ──
   {wk:1,date:'2026-04-20',day:'Mon',event:'',workout:'Zwift: Ramp Test (FTP Baseline)',type:'zwift',target:'10mi easy route. Log FTP result — update the FTP field top right.'},
@@ -1730,90 +672,55 @@ const TRAINING_PLAN = [
   {wk:12,date:'2026-07-11',day:'Sat',event:'',workout:'REST',type:'rest',target:'Full rest.'},
   {wk:12,date:'2026-07-12',day:'Sun',event:'',workout:'REST',type:'rest',target:'Full rest. Iceland tomorrow.'},
 ];
-// ── LATEST ACTIVITY ──────────────────────────────────────────────────────
-async function loadLatestStravaActivity() {
-  const analysisEmpty = document.getElementById('analysisEmpty');
-  const analysisContent = document.getElementById('analysisContent');
-  if (analysisEmpty) {
-    analysisEmpty.style.display = 'block';
-    analysisEmpty.innerHTML = '<h3>Loading latest activity...</h3><p style="color:var(--muted);margin-top:8px;font-family:var(--mono);font-size:11px;">Fetching from Strava</p>';
-  }
 
-  if (!isStravaConnected()) {
-    if (analysisEmpty) analysisEmpty.innerHTML = '<h3>Connect Strava to see your latest activity</h3><p>Go to the Strava tab to connect.</p>';
-    return;
-  }
+const STRAVA_CLIENT_ID     = '226635';
+const STRAVA_CLIENT_SECRET = '02bd23b5558d74cc2c24958f18b2b77d57042247';
+const STRAVA_REDIRECT_URI  = 'https://slippitty.github.io/performance/';
+const STRAVA_SCOPE         = 'read,activity:read_all,profile:read_all';
 
-  try {
-    // Get most recent activity
-    const activities = await stravaFetch('/athlete/activities?per_page=1');
-    if (!activities || !activities.length) {
-      if (analysisEmpty) analysisEmpty.innerHTML = '<h3>No activities found</h3>';
-      return;
-    }
+let ftp    = parseInt(localStorage.getItem('ftp') || '149');
+let rides  = JSON.parse(localStorage.getItem('rides') || '[]');
+let currentRide = null;
+let charts = {};
 
-    const latest = activities[0];
+document.getElementById('ftpInput').value = ftp;
 
-    // Get full activity with streams
-    const [detail, streams] = await Promise.all([
-      stravaFetch('/activities/' + latest.id + '?include_all_efforts=true'),
-      stravaFetch('/activities/' + latest.id + '/streams?keys=time,watts,heartrate,velocity_smooth,altitude,latlng,distance&key_by_type=true'),
-    ]);
-
-    if (!detail) {
-      if (analysisEmpty) analysisEmpty.innerHTML = '<h3>Could not load activity</h3>';
-      return;
-    }
-
-    // Build points array from streams
-    const len = streams?.time?.data?.length || 0;
-    const points = [];
-    for (let i = 0; i < len; i++) {
-      const t = streams.time?.data[i] || 0;
-      const latlon = streams.latlng?.data[i];
-      points.push({
-        time: new Date(new Date(latest.start_date).getTime() + t * 1000),
-        lat: latlon ? latlon[0] : null,
-        lon: latlon ? latlon[1] : null,
-        power: streams.watts?.data[i] || 0,
-        hr: streams.heartrate?.data[i] || 0,
-        speed: streams.velocity_smooth?.data[i] ? streams.velocity_smooth.data[i] * 2.23694 : 0,
-        ele: streams.altitude?.data[i] || 0,
-        distance: streams.distance?.data[i] ? streams.distance.data[i] * 0.000621371 : 0,
-      });
-    }
-
-    // Build fitLaps from segment efforts
-    const fitLaps = (detail.segment_efforts || [])
-      .filter(e => e.segment.starred)
-      .map((e, i) => ({
-        num: i + 1,
-        avgPower: e.average_watts ? Math.round(e.average_watts) : null,
-        maxPower: null,
-        avgHR: e.average_heartrate ? Math.round(e.average_heartrate) : null,
-        avgSpeed: e.average_speed ? parseFloat((e.average_speed * 2.23694).toFixed(1)) : null,
-        dist: parseFloat((e.segment.distance * 0.000621371).toFixed(2)),
-        durSec: e.elapsed_time,
-        name: e.segment.name,
-      }));
-
-    // Update header to show activity name
-    const headerSub = document.querySelector('.header-sub');
-    if (headerSub) headerSub.textContent = latest.name + ' · ' + new Date(latest.start_date_local).toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});
-
-    processRide(points, latest.name, fitLaps);
-  } catch(e) {
-    console.error('Latest activity error:', e);
-    if (analysisEmpty) analysisEmpty.innerHTML = '<h3>Error loading activity</h3><p style="color:var(--muted);">' + e.message + '</p>';
-  }
+function updateFTP(v) {
+  ftp = parseInt(v) || 149;
+  localStorage.setItem('ftp', ftp);
+  if (currentRide) renderAnalysis(currentRide);
+  toast('FTP updated to ' + ftp + 'w');
 }
 
-// ── STRAVA AUTH ───────────────────────────────────────────────────────────
+// ── TABS ──────────────────────────────────────────────────────────────────
+function showTab(name) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  const panel = document.getElementById('tab-' + name);
+  if (panel) panel.classList.add('active');
+  document.querySelectorAll('nav button').forEach(b => {
+    if ((b.getAttribute('onclick') || '').includes("'" + name + "'")) b.classList.add('active');
+  });
+  if (name === 'progress')  { renderProgress(); if (isStravaConnected()) { renderStravaProgress(); renderStravaProgressInProgress(); } }
+  if (name === 'segments')  { if (currentRide) renderSegments(currentRide); }
+  if (name === 'analysis')  { if (currentRide) renderAnalysis(currentRide); else loadLatestStravaActivity(); }
+  if (name === 'strava')    { renderStravaButton(); if (isStravaConnected()) { renderStravaContent(); renderStravaProgress(); } }
+  if (name === 'plan')      { renderPlan(); }
+}
+
+// ── TOAST ──────────────────────────────────────────────────────────────────
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// ── STRAVA AUTH ────────────────────────────────────────────────────────────
 function stravaConnect() {
-  const url = 'https://www.strava.com/oauth/authorize?client_id=' + STRAVA_CLIENT_ID
+  window.location.href = 'https://www.strava.com/oauth/authorize?client_id=' + STRAVA_CLIENT_ID
     + '&redirect_uri=' + encodeURIComponent(STRAVA_REDIRECT_URI)
     + '&response_type=code&scope=' + STRAVA_SCOPE;
-  window.location.href = url;
 }
 
 async function stravaExchangeToken(code) {
@@ -1837,7 +744,7 @@ async function stravaExchangeToken(code) {
 
 async function stravaRefreshIfNeeded() {
   const exp = parseInt(localStorage.getItem('strava_expires_at') || '0');
-  if (exp > Math.floor(Date.now()/1000) + 60) return localStorage.getItem('strava_access_token');
+  if (exp > Math.floor(Date.now() / 1000) + 60) return localStorage.getItem('strava_access_token');
   try {
     const res = await fetch('https://www.strava.com/oauth/token', {
       method: 'POST',
@@ -1869,25 +776,20 @@ function isStravaConnected() { return !!localStorage.getItem('strava_access_toke
 
 function fmtSecs(s) {
   if (!s) return '--';
-  const m = Math.floor(s/60), sec = s % 60;
-  return m + ':' + String(sec).padStart(2,'0');
-}
-
-function updateStravaNotConnected() {
-  const nc = document.getElementById('stravaNotConnected');
-  const sc = document.getElementById('stravaCharts');
-  if (!nc) return;
-  nc.style.display = isStravaConnected() ? 'none' : 'block';
-  if (sc) sc.style.display = isStravaConnected() ? 'flex' : 'none';
+  const m = Math.floor(s / 60), sec = s % 60;
+  return m + ':' + String(sec).padStart(2, '0');
 }
 
 function renderStravaButton() {
-  updateStravaNotConnected();
   const el = document.getElementById('stravaConnectBtn');
   if (!el) return;
+  const nc = document.getElementById('stravaNotConnected');
+  const sc = document.getElementById('stravaCharts');
+  if (nc) nc.style.display = isStravaConnected() ? 'none' : 'block';
+  if (sc) sc.style.display = isStravaConnected() ? 'flex' : 'none';
   if (isStravaConnected()) {
     const ath = JSON.parse(localStorage.getItem('strava_athlete') || '{}');
-    el.innerHTML = '<span style="color:var(--accent);font-family:var(--mono);font-size:11px;">Connected as ' + (ath.firstname||'') + ' ' + (ath.lastname||'') + '</span>'
+    el.innerHTML = '<span style="color:var(--accent);font-family:var(--mono);font-size:11px;">Connected as ' + (ath.firstname || '') + ' ' + (ath.lastname || '') + '</span>'
       + ' <button onclick="loadStravaActivities()" style="background:var(--surface2);border:1px solid var(--accent);color:var(--accent);font-family:var(--mono);font-size:11px;padding:5px 12px;border-radius:4px;cursor:pointer;margin-left:8px;">Sync</button>'
       + ' <button onclick="stravaDisconnect()" style="background:none;border:1px solid var(--border);color:var(--muted);font-family:var(--mono);font-size:10px;padding:4px 10px;border-radius:4px;cursor:pointer;margin-left:6px;">Disconnect</button>';
   } else {
@@ -1896,9 +798,10 @@ function renderStravaButton() {
 }
 
 function stravaDisconnect() {
-  ['strava_access_token','strava_refresh_token','strava_expires_at','strava_athlete','strava_activities','strava_segments'].forEach(k => localStorage.removeItem(k));
+  ['strava_access_token','strava_refresh_token','strava_expires_at','strava_athlete','strava_activities','strava_segments','strava_runs'].forEach(k => localStorage.removeItem(k));
   renderStravaButton();
-  document.getElementById('stravaContent').style.display = 'none';
+  const c = document.getElementById('stravaContent');
+  if (c) c.style.display = 'none';
   toast('Disconnected from Strava');
 }
 
@@ -1906,37 +809,30 @@ async function loadStravaActivities() {
   const loadEl = document.getElementById('stravaLoading');
   const setMsg = msg => { if (loadEl) loadEl.textContent = msg; };
   if (loadEl) loadEl.style.display = 'block';
-
   try {
     setMsg('Fetching activity list...');
     const activities = await stravaFetch('/athlete/activities?per_page=100');
-    if (!activities) { toast('Strava sync failed'); if (loadEl) { loadEl.style.display='none'; loadEl.textContent='Syncing from Strava...'; } return; }
+    if (!activities) { toast('Strava sync failed'); if (loadEl) { loadEl.style.display = 'none'; loadEl.textContent = 'Syncing from Strava...'; } return; }
 
-    const isRide = a => ['Ride','GravelRide','MountainBikeRide','VirtualRide','EBikeRide'].includes(a.sport_type||a.type);
-    const isRun  = a => ['Run','TrailRun','VirtualRun','Walk','Hike'].includes(a.sport_type||a.type);
+    const isRide = a => ['Ride','GravelRide','MountainBikeRide','VirtualRide','EBikeRide'].includes(a.sport_type || a.type);
+    const isRun  = a => ['Run','TrailRun','VirtualRun','Walk','Hike'].includes(a.sport_type || a.type);
+    const isZwift = a => (a.type === 'VirtualRide' || a.sport_type === 'VirtualRide'
+      || (a.name||'').toLowerCase().includes('zwift')
+      || (a.name||'').toLowerCase().includes('watopia'));
 
     const rides = activities.filter(isRide);
     const runs  = activities.filter(isRun);
 
-    // Save run summaries
-    const runSummaries = runs.map(a => ({
+    localStorage.setItem('strava_runs', JSON.stringify(runs.map(a => ({
       id: a.id, name: a.name, date: a.start_date_local, type: 'run',
       distMiles: parseFloat((a.distance * 0.000621371).toFixed(2)),
       durationSec: a.moving_time,
       avgHR: a.average_heartrate ? Math.round(a.average_heartrate) : null,
-      avgSpeed: a.average_speed ? parseFloat((a.average_speed * 2.23694).toFixed(1)) : null,
-      avgPaceMPM: a.average_speed && a.average_speed > 0 ? parseFloat((26.8224 / a.average_speed / 60).toFixed(3)) : null,
+      avgPaceMPM: a.average_speed && a.average_speed > 0 ? (26.8224 / a.average_speed / 60) : null,
       elevGainFt: a.total_elevation_gain ? Math.round(a.total_elevation_gain * 3.28084) : null,
-    }));
-    localStorage.setItem('strava_runs', JSON.stringify(runSummaries));
+    }))));
 
-    // Save ride summaries — tag Zwift vs outdoor
-    const isZwift = a => a.type === 'VirtualRide' || a.sport_type === 'VirtualRide'
-      || (a.name||'').toLowerCase().includes('zwift')
-      || (a.name||'').toLowerCase().includes('watopia')
-      || (a.name||'').toLowerCase().includes('virtual')
-      || (a.device_name||'').toLowerCase().includes('zwift');
-    const rideSummaries = rides.map(a => ({
+    localStorage.setItem('strava_activities', JSON.stringify(rides.map(a => ({
       id: a.id, name: a.name, date: a.start_date_local, type: 'ride',
       zwift: isZwift(a),
       distMiles: parseFloat((a.distance * 0.000621371).toFixed(2)),
@@ -1947,33 +843,21 @@ async function loadStravaActivities() {
       maxHR: a.max_heartrate || null,
       avgSpeed: a.average_speed ? parseFloat((a.average_speed * 2.23694).toFixed(1)) : null,
       elevGainFt: a.total_elevation_gain ? Math.round(a.total_elevation_gain * 3.28084) : null,
-      sufferScore: a.suffer_score || null,
-    }));
-    localStorage.setItem('strava_activities', JSON.stringify(rideSummaries));
+    }))));
 
-    // Fetch full details for every ride to get segment efforts
     const segMap = {};
     for (let i = 0; i < rides.length; i++) {
-      const ride = rides[i];
-      setMsg('Loading ride ' + (i+1) + ' of ' + rides.length + ': ' + ride.name + '...');
-      const detail = await stravaFetch('/activities/' + ride.id + '?include_all_efforts=true');
+      setMsg('Loading ride ' + (i + 1) + ' of ' + rides.length + ': ' + rides[i].name + '...');
+      const detail = await stravaFetch('/activities/' + rides[i].id + '?include_all_efforts=true');
       if (!detail || !detail.segment_efforts) continue;
       for (const eff of detail.segment_efforts) {
         const seg = eff.segment;
         if (!segMap[seg.id]) {
-          segMap[seg.id] = {
-            id: seg.id, name: seg.name,
-            distMi: parseFloat((seg.distance * 0.000621371).toFixed(2)),
-            grade: seg.average_grade,
-            starred: false,
-            efforts: []
-          };
+          segMap[seg.id] = { id: seg.id, name: seg.name, distMi: parseFloat((seg.distance * 0.000621371).toFixed(2)), grade: seg.average_grade, starred: false, efforts: [] };
         }
         segMap[seg.id].efforts.push({
-          date: eff.start_date_local,
-          actId: ride.id, actName: ride.name,
-          elapsed: eff.elapsed_time,
-          avgPower: eff.average_watts ? Math.round(eff.average_watts) : null,
+          date: eff.start_date_local, actId: rides[i].id, actName: rides[i].name,
+          elapsed: eff.elapsed_time, avgPower: eff.average_watts ? Math.round(eff.average_watts) : null,
           avgHR: eff.average_heartrate ? Math.round(eff.average_heartrate) : null,
           avgSpeed: eff.average_speed ? parseFloat((eff.average_speed * 2.23694).toFixed(1)) : null,
           prRank: eff.pr_rank || null,
@@ -1981,18 +865,14 @@ async function loadStravaActivities() {
       }
     }
 
-    // Fetch PR + starred status for each unique segment (batched)
     const segIds = Object.keys(segMap);
     setMsg('Loading segment PRs (' + segIds.length + ' segments)...');
     for (const sid of segIds) {
       const info = await stravaFetch('/segments/' + sid);
       if (info) {
         segMap[sid].starred = info.starred || false;
-        segMap[sid].pr = info.athlete_pr_effort ? {
-          elapsed: info.athlete_pr_effort.elapsed_time,
-          date: info.athlete_pr_effort.start_date_local
-        } : null;
-        segMap[sid].kom = info.xoms ? (info.xoms.kom || null) : null;
+        segMap[sid].pr = info.athlete_pr_effort ? { elapsed: info.athlete_pr_effort.elapsed_time, date: info.athlete_pr_effort.start_date_local } : null;
+        segMap[sid].kom = (info.xoms && info.xoms.kom) ? info.xoms.kom : null;
       }
     }
 
@@ -2012,361 +892,132 @@ function renderStravaContent() {
   const content = document.getElementById('stravaContent');
   if (!content) return;
   content.style.display = 'block';
+  const segments = JSON.parse(localStorage.getItem('strava_segments') || '[]');
+  const starred  = segments.filter(s => s.starred).sort((a, b) => b.efforts.length - a.efforts.length);
 
-  const activities = JSON.parse(localStorage.getItem('strava_activities') || '[]');
-  const segments   = JSON.parse(localStorage.getItem('strava_segments') || '[]');
+  const fmtDate = d => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
-  // Only show starred segments, sorted by effort count
-  const sorted = segments.filter(s => s.starred).sort((a,b) => b.efforts.length - a.efforts.length);
-
-  const fmtDate = d => new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric'});
-  const fmtTime = s => { const h=Math.floor(s/3600),m=Math.floor((s%3600)/60); return h>0?h+'h '+m+'m':m+'m'; };
-
-  // Segments table
   let segsHTML = '';
-  if (!sorted.length) {
-    segsHTML = '<div style="text-align:center;padding:40px 20px;"><div style="font-family:var(--serif);font-size:1.2rem;margin-bottom:8px;">No starred segments yet</div><div style="color:var(--muted);font-size:13px;">Star segments on Strava then hit Sync to load them here.</div></div>';
-  }
-  if (sorted.length) {
-    segsHTML = '<div class="section-title" style="margin-bottom:12px;">Starred segments — recent efforts</div>'
+  if (!starred.length) {
+    segsHTML = '<div style="text-align:center;padding:40px 20px;"><div style="font-family:var(--serif);font-size:1.2rem;margin-bottom:8px;">No starred segments yet</div><div style="color:var(--muted);font-size:13px;">Star segments on Strava then hit Sync.</div></div>';
+  } else {
+    segsHTML = '<div class="section-title" style="margin-bottom:12px;">Starred segments</div>'
       + '<div class="chart-card" style="margin-bottom:20px;overflow-x:auto;">'
       + '<table class="seg-table"><thead><tr>'
-      + '<th>Segment</th><th>Dist</th><th>Grade</th><th>Best this block</th><th>Your PR</th><th>Efforts</th><th>Last effort</th><th>Avg Power</th><th>Avg HR</th>'
+      + '<th>Segment</th><th>Dist</th><th>Grade</th><th>Best this block</th><th>Your PR</th><th>Efforts</th><th>Last</th><th>Avg Power</th><th>Avg HR</th>'
       + '</tr></thead><tbody>';
-
-    for (const seg of sorted.slice(0, 25)) {
-      const best = seg.efforts.reduce((b,e) => e.elapsed < (b?.elapsed||99999) ? e : b, null);
-      const last = seg.efforts.sort((a,b) => new Date(b.date)-new Date(a.date))[0];
+    for (const seg of starred.slice(0, 30)) {
+      const efforts = [...seg.efforts].sort((a, b) => a.elapsed - b.elapsed);
+      const best = efforts[0] || null;
+      const last = [...seg.efforts].sort((a, b) => new Date(b.date) - new Date(a.date))[0] || null;
       const isPR = best && seg.pr && best.elapsed <= seg.pr.elapsed;
       segsHTML += '<tr>'
         + '<td><span class="seg-name">' + seg.name + '</span></td>'
         + '<td>' + seg.distMi + 'mi</td>'
-        + '<td>' + (seg.grade||0).toFixed(1) + '%</td>'
-        + '<td class="' + (isPR ? 'seg-best' : '') + '">' + (best ? fmtSecs(best.elapsed) : '--')
-          + (best?.prRank === 1 ? ' <span class="pill">PR</span>' : '') + '</td>'
+        + '<td>' + (seg.grade || 0).toFixed(1) + '%</td>'
+        + '<td class="' + (isPR ? 'seg-best' : '') + '">' + (best ? fmtSecs(best.elapsed) : '--') + (best && best.prRank === 1 ? ' <span class="pill">PR</span>' : '') + '</td>'
         + '<td>' + (seg.pr ? fmtSecs(seg.pr.elapsed) + ' <span style="font-size:10px;color:var(--muted);">(' + fmtDate(seg.pr.date) + ')</span>' : '--') + '</td>'
         + '<td>' + seg.efforts.length + '</td>'
         + '<td>' + (last ? fmtDate(last.date) : '--') + '</td>'
-        + '<td>' + (best?.avgPower ? best.avgPower + 'w' : '--') + '</td>'
-        + '<td>' + (best?.avgHR ? Math.round(best.avgHR) + 'bpm' : '--') + '</td>'
+        + '<td>' + (best && best.avgPower ? best.avgPower + 'w' : '--') + '</td>'
+        + '<td>' + (best && best.avgHR ? best.avgHR + 'bpm' : '--') + '</td>'
         + '</tr>';
     }
     segsHTML += '</tbody></table></div>';
   }
-
-  // Recent rides list
-  let runsHTML = ''; // runs moved to Progress tab
-  }
-
-  let ridesHTML = // rides list removed — see Progress tab
-
   content.innerHTML = segsHTML;
 }
 
 function renderStravaProgress() {
-  const activities = JSON.parse(localStorage.getItem('strava_activities') || '[]');
-  const segments   = JSON.parse(localStorage.getItem('strava_segments') || '[]');
-  if (!activities.length) return;
-
+  const segments = JSON.parse(localStorage.getItem('strava_segments') || '[]');
   const hillChart = document.getElementById('stravaCharts');
   if (hillChart) hillChart.style.display = 'flex';
-
-  // Find PP hill segment
   const ppHill = segments.find(s => s.name && s.name.toLowerCase().includes('prospect park hill'));
   const ppCanvas = document.getElementById('stravaHillChart');
   if (!ppHill || !ppHill.efforts.length || !ppCanvas) return;
-
-  // Group efforts by date — get fastest and average per day
   const byDate = {};
   for (const eff of ppHill.efforts) {
-    const day = new Date(eff.date).toLocaleDateString('en-US',{month:'short',day:'numeric'});
+    const day = new Date(eff.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     if (!byDate[day]) byDate[day] = [];
     byDate[day].push(eff.elapsed);
   }
-
-  // Sort days chronologically
-  const days = Object.keys(byDate).sort((a,b) => new Date(a+' 2026') - new Date(b+' 2026'));
+  const days    = Object.keys(byDate).sort((a, b) => new Date(a + ' 2026') - new Date(b + ' 2026'));
   const fastest = days.map(d => Math.min(...byDate[d]));
-  const average = days.map(d => Math.round(byDate[d].reduce((a,b)=>a+b,0)/byDate[d].length));
+  const average = days.map(d => Math.round(byDate[d].reduce((a, b) => a + b, 0) / byDate[d].length));
   const counts  = days.map(d => byDate[d].length);
-
   destroyChart('stravaHillChart');
   charts.stravaHillChart = new Chart(ppCanvas, {
     type: 'line',
     data: {
-      labels: days.map((d,i) => d + (counts[i] > 1 ? ' (x'+counts[i]+')' : '')),
+      labels: days.map((d, i) => d + (counts[i] > 1 ? ' (x' + counts[i] + ')' : '')),
       datasets: [
-        {
-          label: 'Fastest',
-          data: fastest,
-          borderColor: '#c8f060', backgroundColor: 'rgba(200,240,96,0.15)',
-          fill: false, tension: 0.3, pointRadius: 5, pointBackgroundColor: '#c8f060',
-          borderWidth: 2,
-        },
-        {
-          label: 'Average',
-          data: average,
-          borderColor: '#60c8f0', backgroundColor: 'rgba(96,200,240,0.1)',
-          fill: false, tension: 0.3, pointRadius: 4, pointBackgroundColor: '#60c8f0',
-          borderDash: [4,3], borderWidth: 1.5,
-        },
-        {
-          label: 'Your PR',
-          data: days.map(() => ppHill.pr ? ppHill.pr.elapsed : null),
-          borderColor: 'rgba(240,96,96,0.5)', borderDash: [6,4],
-          pointRadius: 0, fill: false, borderWidth: 1,
-        }
+        { label: 'Fastest', data: fastest, borderColor: '#c8f060', backgroundColor: 'rgba(200,240,96,0.1)', fill: false, tension: 0.3, pointRadius: 5, pointBackgroundColor: '#c8f060', borderWidth: 2 },
+        { label: 'Average', data: average, borderColor: '#60c8f0', fill: false, tension: 0.3, pointRadius: 4, pointBackgroundColor: '#60c8f0', borderDash: [4, 3], borderWidth: 1.5 },
+        { label: 'PR',      data: days.map(() => ppHill.pr ? ppHill.pr.elapsed : null), borderColor: 'rgba(240,96,96,0.5)', pointRadius: 0, fill: false, borderDash: [6, 4], borderWidth: 1 },
       ]
     },
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: {
-        legend: { labels: { color: '#6b7080', font: { family: 'DM Mono', size: 10 }, boxWidth: 12 } },
-        tooltip: {
-          backgroundColor: '#1e2028', titleColor: '#e8eaf0', bodyColor: '#6b7080',
-          callbacks: { label: ctx => ctx.dataset.label + ': ' + fmtSecs(ctx.raw) }
-        }
-      },
+      plugins: { legend: { labels: { color: '#6b7080', font: { family: 'DM Mono', size: 10 }, boxWidth: 12 } }, tooltip: { backgroundColor: '#1e2028', titleColor: '#e8eaf0', bodyColor: '#6b7080', callbacks: { label: ctx => ctx.dataset.label + ': ' + fmtSecs(ctx.raw) } } },
       scales: {
         x: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } },
-        y: {
-          reverse: true,
-          ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 }, callback: v => fmtSecs(v) },
-          grid: { color: '#2a2d35' },
-          title: { display: true, text: 'time — lower is faster', color: '#6b7080', font: { family: 'DM Mono', size: 10 } }
-        }
+        y: { reverse: true, ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 }, callback: v => fmtSecs(v) }, grid: { color: '#2a2d35' }, title: { display: true, text: 'lower = faster', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }
       }
     }
   });
 }
 
-function renderStravaProgressInProgress() {
-  const segments   = JSON.parse(localStorage.getItem('strava_segments') || '[]');
-  const activities = JSON.parse(localStorage.getItem('strava_activities') || '[]');
-  const section = document.getElementById('progressHillSection');
-  if (!section) return;
-
-  const ppHill = segments.find(s => s.name && s.name.toLowerCase().includes('prospect park hill'));
-  if (!ppHill || !ppHill.efforts.length) { section.style.display = 'none'; return; }
-  section.style.display = 'block';
-
-  // Group by date
-  const byDate = {};
-  for (const eff of ppHill.efforts) {
-    const day = new Date(eff.date).toLocaleDateString('en-US',{month:'short',day:'numeric'});
-    if (!byDate[day]) byDate[day] = [];
-    byDate[day].push(eff.elapsed);
+// ── LATEST ACTIVITY ────────────────────────────────────────────────────────
+async function loadLatestStravaActivity() {
+  const analysisEmpty = document.getElementById('analysisEmpty');
+  if (analysisEmpty) {
+    analysisEmpty.style.display = 'block';
+    analysisEmpty.innerHTML = '<h3>Loading latest activity...</h3><p style="color:var(--muted);margin-top:8px;font-family:var(--mono);font-size:11px;">Fetching from Strava</p>';
   }
-  const days = Object.keys(byDate).sort((a,b) => new Date(a+' 2026') - new Date(b+' 2026'));
-  const fastest = days.map(d => Math.min(...byDate[d]));
-  const average = days.map(d => Math.round(byDate[d].reduce((a,b)=>a+b,0)/byDate[d].length));
-  const counts  = days.map(d => byDate[d].length);
-
-  destroyChart('progressHillStrava');
-  const c1 = document.getElementById('progressHillStrava');
-  if (c1) {
-    charts.progressHillStrava = new Chart(c1, {
-      type: 'line',
-      data: {
-        labels: days.map((d,i) => d + (counts[i]>1?' (x'+counts[i]+')':'')),
-        datasets: [
-          { label:'Fastest', data:fastest, borderColor:'#c8f060', pointBackgroundColor:'#c8f060', fill:false, tension:0.3, pointRadius:5, borderWidth:2 },
-          { label:'Average', data:average, borderColor:'#60c8f0', pointBackgroundColor:'#60c8f0', fill:false, tension:0.3, pointRadius:4, borderDash:[4,3], borderWidth:1.5 },
-          { label:'PR', data:days.map(()=>ppHill.pr?ppHill.pr.elapsed:null), borderColor:'rgba(240,96,96,0.5)', pointRadius:0, fill:false, borderDash:[6,4], borderWidth:1 },
-        ]
-      },
-      options: {
-        responsive:true, maintainAspectRatio:false,
-        plugins:{ legend:{labels:{color:'#6b7080',font:{family:'DM Mono',size:10},boxWidth:12}}, tooltip:{backgroundColor:'#1e2028',titleColor:'#e8eaf0',bodyColor:'#6b7080',callbacks:{label:ctx=>ctx.dataset.label+': '+fmtSecs(ctx.raw)}} },
-        scales:{
-          x:{ticks:{color:'#6b7080',font:{family:'DM Mono',size:10}},grid:{color:'#2a2d35'}},
-          y:{reverse:true,ticks:{color:'#6b7080',font:{family:'DM Mono',size:10},callback:v=>fmtSecs(v)},grid:{color:'#2a2d35'},title:{display:true,text:'lower = faster',color:'#6b7080',font:{family:'DM Mono',size:10}}}
-        }
-      }
-    });
+  if (!isStravaConnected()) {
+    if (analysisEmpty) analysisEmpty.innerHTML = '<h3>Connect Strava to see your latest activity</h3><p>Go to the Strava tab to connect.</p>';
+    return;
   }
-
-  // NP trend — split Zwift vs outdoor
-  const sorted = [...activities].sort((a,b)=>new Date(a.date)-new Date(b.date));
-  const outdoorRides = sorted.filter(a => !a.zwift && (a.np||a.avgPower));
-  const zwiftRides   = sorted.filter(a =>  a.zwift && (a.np||a.avgPower));
-  destroyChart('progressNPStrava');
-  const c2 = document.getElementById('progressNPStrava');
-  if (c2 && (outdoorRides.length || zwiftRides.length)) {
-    // Use all dates as x-axis labels
-    const allDates = sorted.filter(a=>a.np||a.avgPower).map(a=>new Date(a.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}));
-    const uniqueDates = [...new Set(allDates)];
-    // Map each date to outdoor/zwift NP (null if no ride that day)
-    const dateToOutdoor = {};
-    const dateToZwift   = {};
-    outdoorRides.forEach(a => { const d=new Date(a.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}); dateToOutdoor[d]=a.np||a.avgPower; });
-    zwiftRides.forEach(a   => { const d=new Date(a.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}); dateToZwift[d]=a.np||a.avgPower; });
-
-    charts.progressNPStrava = new Chart(c2, {
-      type:'line',
-      data:{
-        labels: uniqueDates,
-        datasets:[
-          { label:'Outdoor NP', data:uniqueDates.map(d=>dateToOutdoor[d]||null),
-            borderColor:'#c8f060', backgroundColor:'rgba(200,240,96,0.1)',
-            fill:false, tension:0.3, pointRadius:4, pointBackgroundColor:'#c8f060',
-            spanGaps:false, borderWidth:2 },
-          { label:'Zwift NP', data:uniqueDates.map(d=>dateToZwift[d]||null),
-            borderColor:'#60c8f0', backgroundColor:'rgba(96,200,240,0.05)',
-            fill:false, tension:0.3, pointRadius:4, pointBackgroundColor:'#60c8f0',
-            spanGaps:false, borderDash:[4,3], borderWidth:1.5 },
-        ]
-      },
-      options:{
-        responsive:true, maintainAspectRatio:false,
-        plugins:{
-          legend:{labels:{color:'#6b7080',font:{family:'DM Mono',size:10},boxWidth:12}},
-          tooltip:{backgroundColor:'#1e2028',titleColor:'#e8eaf0',bodyColor:'#6b7080',
-            callbacks:{label:ctx=>ctx.dataset.label+': '+ctx.raw+'w'}}
-        },
-        scales:{
-          x:{ticks:{color:'#6b7080',font:{family:'DM Mono',size:10},maxTicksLimit:12},grid:{color:'#2a2d35'}},
-          y:{ticks:{color:'#6b7080',font:{family:'DM Mono',size:10}},grid:{color:'#2a2d35'},
-            title:{display:true,text:'NP (watts)',color:'#6b7080',font:{family:'DM Mono',size:10}}}
-        }
-      }
-    });
-  }
-}
-
-
-// ── TRAINING PLAN ────────────────────────────────────────────────────────
-function getPlanStatus(date) {
-  return JSON.parse(localStorage.getItem('plan_status') || '{}')[date] || 'pending';
-}
-
-function setPlanStatus(date, status) {
-  const s = JSON.parse(localStorage.getItem('plan_status') || '{}');
-  s[date] = status;
-  localStorage.setItem('plan_status', JSON.stringify(s));
-  renderPlan();
-}
-
-function matchStravaActivity(date) {
-  // Find Strava activity on same date
-  const activities = [
-    ...JSON.parse(localStorage.getItem('strava_activities') || '[]'),
-    ...JSON.parse(localStorage.getItem('strava_runs') || '[]'),
-  ];
-  const d = date.slice(0,10);
-  return activities.filter(a => a.date && a.date.slice(0,10) === d);
-}
-
-function renderPlan() {
-  const container = document.getElementById('planContainer');
-  if (!container) return;
-
-  const today = new Date().toISOString().slice(0,10);
-  const status = JSON.parse(localStorage.getItem('plan_status') || '{}');
-
-  // Group by week
-  const weeks = {};
-  TRAINING_PLAN.forEach(w => {
-    if (!weeks[w.wk]) weeks[w.wk] = [];
-    weeks[w.wk].push(w);
-  });
-
-  // Stats
-  const total = TRAINING_PLAN.length;
-  const done  = Object.values(status).filter(s => s === 'done').length;
-  const skipped = Object.values(status).filter(s => s === 'skipped').length;
-  const past  = TRAINING_PLAN.filter(w => w.date < today).length;
-  const pct   = past > 0 ? Math.round(done/past*100) : 0;
-
-  const typeColors = {
-    race: '#f0a060', ride: '#60c8f0', run: '#c8f060',
-    zwift: '#a060f0', rest: '#444', strength: '#f06060'
-  };
-  const typeBg = {
-    race: 'rgba(240,160,96,0.08)', ride: 'rgba(96,200,240,0.06)',
-    run: 'rgba(200,240,96,0.06)', zwift: 'rgba(160,96,240,0.06)',
-    rest: 'rgba(255,255,255,0.02)', strength: 'rgba(240,96,96,0.06)'
-  };
-
-  const fmtTime = s => { if(!s) return '--'; const h=Math.floor(s/3600),m=Math.floor((s%3600)/60); return h>0?h+'h '+m+'m':m+'m'; };
-
-  let html = `
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:28px;">
-      <div class="stat-card" style="--accent-color:var(--accent)">
-        <div class="stat-label">Completed</div>
-        <div class="stat-value">${done}<small>/${past} past days</small></div>
-        <div class="stat-sub">${pct}% adherence</div>
-      </div>
-      <div class="stat-card" style="--accent-color:var(--accent2)">
-        <div class="stat-label">Remaining</div>
-        <div class="stat-value">${total - done - skipped}<small> workouts</small></div>
-        <div class="stat-sub">to Iceland Jul 13</div>
-      </div>
-      <div class="stat-card" style="--accent-color:var(--accent3)">
-        <div class="stat-label">Skipped</div>
-        <div class="stat-value">${skipped}</div>
-        <div class="stat-sub">marked as skipped</div>
-      </div>
-      <div class="stat-card" style="--accent-color:var(--accent)">
-        <div class="stat-label">Weeks to Iceland</div>
-        <div class="stat-value">${Math.max(0,Math.ceil((new Date('2026-07-13')-new Date())/604800000))}</div>
-        <div class="stat-sub">departing Jul 13</div>
-      </div>
-    </div>`;
-
-  for (const [wk, days] of Object.entries(weeks)) {
-    html += `<div style="margin-bottom:24px;">
-      <div style="font-family:var(--mono);font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);padding:6px 0 10px;border-bottom:1px solid var(--border);margin-bottom:10px;">Week ${wk}</div>`;
-
-    for (const day of days) {
-      const st = status[day.date] || 'pending';
-      const isToday = day.date === today;
-      const isPast  = day.date < today;
-      const matches = matchStravaActivity(day.date);
-      const color   = typeColors[day.type] || '#888';
-      const bg      = typeBg[day.type] || 'rgba(255,255,255,0.02)';
-      const isBenchmark = day.workout.toLowerCase().includes('benchmark');
-
-      html += `<div style="display:grid;grid-template-columns:90px 16px 1fr auto;gap:10px;align-items:start;padding:10px 12px;border-radius:8px;margin-bottom:4px;background:${bg};border:1px solid ${isToday ? color : st==='done' ? 'rgba(200,240,96,0.2)' : 'var(--border)'};${isToday ? 'box-shadow:0 0 0 1px '+color+';' : ''}">
-        <div>
-          <div style="font-family:var(--mono);font-size:10px;color:var(--muted);">${day.day} ${new Date(day.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div>
-          ${isToday ? '<div style="font-family:var(--mono);font-size:9px;color:'+color+';margin-top:2px;">TODAY</div>' : ''}
-        </div>
-        <div style="width:3px;height:100%;border-radius:2px;background:${color};margin-top:2px;min-height:16px;"></div>
-        <div>
-          <div style="font-size:12px;color:var(--text);margin-bottom:3px;">${isBenchmark ? '📍 ' : ''}${day.workout}</div>
-          ${day.event ? '<div style="font-family:var(--mono);font-size:10px;color:'+color+';">'+day.event+'</div>' : ''}
-          <div style="font-size:11px;color:var(--muted);margin-top:2px;">${day.target}</div>
-          ${matches.length ? matches.map(a => `
-            <div style="margin-top:6px;padding:6px 10px;background:rgba(200,240,96,0.06);border:1px solid rgba(200,240,96,0.2);border-radius:5px;display:flex;gap:16px;flex-wrap:wrap;">
-              <span style="font-family:var(--mono);font-size:10px;color:var(--accent);">✓ ${a.name}</span>
-              ${a.distMiles ? '<span style="font-family:var(--mono);font-size:10px;color:var(--muted);">'+a.distMiles+'mi</span>' : ''}
-              ${a.durationSec ? '<span style="font-family:var(--mono);font-size:10px;color:var(--muted);">'+fmtTime(a.durationSec)+'</span>' : ''}
-              ${(a.np||a.avgPower) ? '<span style="font-family:var(--mono);font-size:10px;color:var(--muted);">'+(a.np||a.avgPower)+'w NP</span>' : ''}
-              ${a.avgHR ? '<span style="font-family:var(--mono);font-size:10px;color:var(--muted);">'+Math.round(a.avgHR)+'bpm</span>' : ''}
-              ${a.avgPaceMPM ? '<span style="font-family:var(--mono);font-size:10px;color:var(--muted);">'+Math.floor(a.avgPaceMPM)+':'+(String(Math.round((a.avgPaceMPM%1)*60)).padStart(2,'0'))+'/mi</span>' : ''}
-            </div>
-          `).join('') : ''}
-        </div>
-        <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;">
-          <button onclick="setPlanStatus('${day.date}','${st==='done'?'pending':'done'}')"
-            style="background:${st==='done'?'rgba(200,240,96,0.15)':'var(--surface2)'};border:1px solid ${st==='done'?'var(--accent)':'var(--border)'};color:${st==='done'?'var(--accent)':'var(--muted)'};font-family:var(--mono);font-size:10px;padding:4px 10px;border-radius:4px;cursor:pointer;white-space:nowrap;">
-            ${st==='done'?'✓ Done':'Mark done'}
-          </button>
-          <button onclick="setPlanStatus('${day.date}','${st==='skipped'?'pending':'skipped'}')"
-            style="background:${st==='skipped'?'rgba(240,96,96,0.1)':'var(--surface2)'};border:1px solid ${st==='skipped'?'var(--danger)':'var(--border)'};color:${st==='skipped'?'var(--danger)':'var(--muted)'};font-family:var(--mono);font-size:10px;padding:4px 10px;border-radius:4px;cursor:pointer;">
-            ${st==='skipped'?'× Skipped':'Skip'}
-          </button>
-        </div>
-      </div>`;
+  try {
+    const activities = await stravaFetch('/athlete/activities?per_page=1');
+    if (!activities || !activities.length) { if (analysisEmpty) analysisEmpty.innerHTML = '<h3>No activities found</h3>'; return; }
+    const latest = activities[0];
+    const [detail, streams] = await Promise.all([
+      stravaFetch('/activities/' + latest.id + '?include_all_efforts=true'),
+      stravaFetch('/activities/' + latest.id + '/streams?keys=time,watts,heartrate,velocity_smooth,altitude,latlng,distance&key_by_type=true'),
+    ]);
+    if (!detail) { if (analysisEmpty) analysisEmpty.innerHTML = '<h3>Could not load activity</h3>'; return; }
+    const len = (streams && streams.time && streams.time.data) ? streams.time.data.length : 0;
+    const points = [];
+    for (let i = 0; i < len; i++) {
+      const t = streams.time.data[i] || 0;
+      const latlon = streams.latlng && streams.latlng.data[i];
+      points.push({
+        time: new Date(new Date(latest.start_date).getTime() + t * 1000),
+        lat: latlon ? latlon[0] : null,
+        lon: latlon ? latlon[1] : null,
+        power: (streams.watts && streams.watts.data[i]) || 0,
+        hr: (streams.heartrate && streams.heartrate.data[i]) || 0,
+        speed: (streams.velocity_smooth && streams.velocity_smooth.data[i]) ? streams.velocity_smooth.data[i] * 2.23694 : 0,
+        ele: (streams.altitude && streams.altitude.data[i]) || 0,
+        distance: (streams.distance && streams.distance.data[i]) ? streams.distance.data[i] * 0.000621371 : 0,
+      });
     }
-    html += '</div>';
+    const fitLaps = (detail.segment_efforts || []).filter(e => e.segment.starred).map((e, i) => ({
+      num: i + 1, name: e.segment.name,
+      avgPower: e.average_watts ? Math.round(e.average_watts) : null,
+      avgHR: e.average_heartrate ? Math.round(e.average_heartrate) : null,
+      avgSpeed: e.average_speed ? parseFloat((e.average_speed * 2.23694).toFixed(1)) : null,
+      dist: parseFloat((e.segment.distance * 0.000621371).toFixed(2)),
+      durSec: e.elapsed_time,
+    }));
+    processRide(points, latest.name, fitLaps);
+  } catch(e) {
+    console.error('Latest activity error:', e);
+    if (analysisEmpty) analysisEmpty.innerHTML = '<h3>Error loading activity</h3><p style="color:var(--muted);">' + e.message + '</p>';
   }
-
-  container.innerHTML = html;
 }
 
-// Handle OAuth callback on page load
 async function handleStravaCallback() {
   const params = new URLSearchParams(window.location.search);
   const code = params.get('code');
@@ -2374,21 +1025,481 @@ async function handleStravaCallback() {
     toast('Connecting to Strava...');
     window.history.replaceState({}, '', window.location.pathname);
     const token = await stravaExchangeToken(code);
-    if (token) {
-      renderStravaButton();
-      await loadStravaActivities();
-    } else {
-      toast('Strava connection failed');
-    }
+    if (token) { renderStravaButton(); await loadStravaActivities(); }
+    else toast('Strava connection failed');
   }
 }
 
-// Init
+// ── FIT PARSER ─────────────────────────────────────────────────────────────
+function parseFIT(buffer, filename) {
+  try {
+    const bytes = new Uint8Array(buffer);
+    if (bytes[8] !== 0x2E || bytes[9] !== 0x46 || bytes[10] !== 0x49 || bytes[11] !== 0x54) { toast('Not a valid FIT file'); return; }
+    const headerLen = bytes[0];
+    const FIT_EPOCH = 631065600000;
+    const defs = {}, points = [], lapData = [];
+    let i = headerLen;
+    const end = bytes.length - 2;
+    function r8(p) { return bytes[p]; }
+    function r16(p, be) { return be ? (bytes[p] << 8) | bytes[p + 1] : bytes[p] | (bytes[p + 1] << 8); }
+    function r32(p, be) { const v = be ? ((bytes[p] << 24) | (bytes[p + 1] << 16) | (bytes[p + 2] << 8) | bytes[p + 3]) : (bytes[p] | (bytes[p + 1] << 8) | (bytes[p + 2] << 16) | (bytes[p + 3] << 24)); return v >>> 0; }
+    function r32s(p, be) { const v = r32(p, be); return v >= 0x80000000 ? v - 0x100000000 : v; }
+    function rVal(p, size, bt, be) {
+      if (size === 1) return r8(p);
+      if (size === 2) return r16(p, be);
+      if (size === 4) return bt === 0x85 ? r32s(p, be) : r32(p, be);
+      return null;
+    }
+    while (i < end) {
+      const hdr = bytes[i];
+      if (hdr & 0x80) { i++; continue; }
+      const isDef = !!(hdr & 0x40), local = hdr & 0x0F;
+      i++;
+      if (isDef) {
+        i++;
+        const be = bytes[i++] === 1;
+        const gn = r16(i, be); i += 2;
+        const nf = bytes[i++];
+        const fields = [];
+        for (let f = 0; f < nf; f++) { fields.push([bytes[i], bytes[i + 1], bytes[i + 2]]); i += 3; }
+        defs[local] = [gn, fields, be];
+      } else {
+        if (!defs[local]) { i++; continue; }
+        const [gn, fields, be] = defs[local];
+        const rec = {};
+        for (const [fn, fs, ft] of fields) {
+          if (i + fs > end) { i += fs; continue; }
+          rec[fn] = rVal(i, fs, ft, be); i += fs;
+        }
+        if (gn === 20) storeRecord(rec, FIT_EPOCH, points);
+        if (gn === 19) storeLap(rec, FIT_EPOCH, lapData);
+      }
+    }
+    if (points.length < 5) { toast('FIT file parsed but no data records found'); return; }
+    processRide(points, filename, lapData);
+  } catch(e) {
+    console.error('FIT parse error:', e);
+    toast('FIT parse error: ' + e.message);
+  }
+}
+
+function storeRecord(rec, FIT_EPOCH, points) {
+  const IV1 = 0xFF, IV2 = 0xFFFF, IV4 = 0xFFFFFFFF, IVS = 0x7FFFFFFF;
+  const ts  = rec[253] !== undefined && rec[253] !== IV4 ? new Date(rec[253] * 1000 + FIT_EPOCH) : null;
+  const lat = rec[0]   !== undefined && rec[0] !== IVS && rec[0] !== -2147483648 ? rec[0] * (180 / 2147483648) : null;
+  const lon = rec[1]   !== undefined && rec[1] !== IVS && rec[1] !== -2147483648 ? rec[1] * (180 / 2147483648) : null;
+  const alt = rec[78]  !== undefined && rec[78] !== IV2 ? rec[78] / 5 - 500 : rec[2] !== undefined && rec[2] !== IV2 ? rec[2] / 5 - 500 : 0;
+  const hr  = rec[3]   !== undefined && rec[3]  !== IV1 ? rec[3]  : 0;
+  const dist = rec[5]  !== undefined && rec[5]  !== IV4 ? rec[5] / 100 : 0;
+  const spd = rec[73]  !== undefined && rec[73] !== IV2 ? rec[73] / 1000 * 2.23694 : rec[6] !== undefined && rec[6] !== IV2 ? rec[6] / 1000 * 2.23694 : 0;
+  const pwr = rec[7]   !== undefined && rec[7]  !== IV2 ? rec[7]  : 0;
+  points.push({ time: ts, lat, lon, ele: alt, hr, cadence: rec[4] || 0, distance: dist * 0.000621371, speed: spd, power: pwr });
+}
+
+function storeLap(rec, FIT_EPOCH, lapData) {
+  lapData.push({
+    durSec: rec[7]  !== undefined ? rec[7] / 1000 : null,
+    dist:   rec[9]  !== undefined ? rec[9] / 100 * 0.000621371 : null,
+    avgPower: rec[19] !== undefined && rec[19] !== 0xFFFF ? rec[19] : null,
+    maxPower: rec[20] !== undefined && rec[20] !== 0xFFFF ? rec[20] : null,
+    avgHR:  rec[15] !== undefined && rec[15] !== 0xFF ? rec[15] : null,
+    maxHR:  rec[16] !== undefined && rec[16] !== 0xFF ? rec[16] : null,
+    avgSpeed: rec[13] !== undefined && rec[13] !== 0xFFFF ? rec[13] / 1000 * 2.23694 : null,
+    np:     rec[33] !== undefined && rec[33] !== 0xFFFF ? rec[33] : null,
+  });
+}
+
+// ── HAVERSINE ──────────────────────────────────────────────────────────────
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 3958.8, dLat = (lat2 - lat1) * Math.PI / 180, dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// ── PP HILL DETECTION ──────────────────────────────────────────────────────
+function detectHillPasses(points, wkg) {
+  const passes = [], w = wkg || 54;
+  let lastLat = null;
+  const entryIndices = [];
+  for (let i = 1; i < points.length; i++) {
+    const p = points[i];
+    if (!p.lat || !p.ele) continue;
+    if (lastLat && lastLat < 40.6622 && p.lat >= 40.6622 && p.ele < 32 && p.speed > 3) {
+      if (!entryIndices.length || i - entryIndices[entryIndices.length - 1] > 200) entryIndices.push(i);
+    }
+    lastLat = p.lat;
+  }
+  for (const si of entryIndices) {
+    const window = points.slice(si, Math.min(si + 450, points.length));
+    if (window.length < 30) continue;
+    let peakIdx = 0;
+    for (let j = 1; j < window.length; j++) { if ((window[j].ele || 0) > (window[peakIdx].ele || 0)) peakIdx = j; }
+    const chunk = window.slice(0, peakIdx + 1);
+    if (chunk.length < 30) continue;
+    const altGain = (chunk[chunk.length - 1].ele || 0) - (chunk[0].ele || 0);
+    if (altGain < 10) continue;
+    const durSec = chunk[0].time && chunk[chunk.length - 1].time ? (chunk[chunk.length - 1].time - chunk[0].time) / 1000 : chunk.length;
+    if (durSec < 60 || durSec > 600) continue;
+    const distMi = chunk[chunk.length - 1].distance && chunk[0].distance ? chunk[chunk.length - 1].distance - chunk[0].distance : 0.5;
+    if (distMi < 0.3 || distMi > 1.2) continue;
+    const pows = chunk.map(x => x.power).filter(x => x > 20);
+    const hrs  = chunk.map(x => x.hr).filter(x => x > 60);
+    const spds = chunk.map(x => x.speed).filter(x => x > 0);
+    const avgPow = pows.length ? Math.round(pows.reduce((a, b) => a + b, 0) / pows.length) : null;
+    const avgHR  = hrs.length  ? Math.round(hrs.reduce((a, b) => a + b, 0) / hrs.length) : null;
+    const avgSpd = spds.length ? parseFloat((spds.reduce((a, b) => a + b, 0) / spds.length).toFixed(1)) : null;
+    const maxPow = pows.length ? Math.max(...pows) : null;
+    const vam    = altGain > 0 && durSec > 0 ? Math.round((altGain / durSec) * 3600) : null;
+    passes.push({
+      num: passes.length + 1, durSec: Math.round(durSec), distMi: parseFloat(distMi.toFixed(2)),
+      altGain: Math.round(altGain), avgPower: avgPow, maxPower: maxPow, avgHR, avgSpeed: avgSpd,
+      vam, wPerKg: avgPow ? parseFloat((avgPow / w).toFixed(2)) : null,
+      cardiacCost: avgPow && avgHR ? parseFloat((avgHR / avgPow).toFixed(2)) : null,
+    });
+  }
+  return passes;
+}
+
+// ── LAP DETECTION ──────────────────────────────────────────────────────────
+function detectLaps(points, totalDist) {
+  const laps = [], LAP_DIST = 3.35;
+  if (totalDist < 1) return laps;
+  const numLaps = Math.round(totalDist / LAP_DIST);
+  if (numLaps < 1) return laps;
+  const chunkSize = Math.floor(points.length / numLaps);
+  for (let i = 0; i < numLaps; i++) {
+    const chunk = points.slice(i * chunkSize, (i + 1) * chunkSize);
+    const pows = chunk.map(p => p.power || 0).filter(p => p > 0);
+    const hrs  = chunk.map(p => p.hr || 0).filter(h => h > 0);
+    const spds = chunk.map(p => p.speed || 0).filter(s => s > 0);
+    let lapDist = 0;
+    for (let j = 1; j < chunk.length; j++) { if (chunk[j].lat && chunk[j - 1].lat) lapDist += haversine(chunk[j - 1].lat, chunk[j - 1].lon, chunk[j].lat, chunk[j].lon); }
+    if (lapDist < 0.1 && spds.length) lapDist = (spds.reduce((a, b) => a + b, 0) / spds.length) * (chunk.length / 3600);
+    let durSec = 0;
+    if (chunk[0] && chunk[0].time && chunk[chunk.length - 1] && chunk[chunk.length - 1].time) durSec = (chunk[chunk.length - 1].time - chunk[0].time) / 1000;
+    else durSec = chunk.length;
+    laps.push({
+      num: i + 1,
+      avgPower: pows.length ? Math.round(pows.reduce((a, b) => a + b, 0) / pows.length) : null,
+      maxPower: pows.length ? Math.max(...pows) : null,
+      avgHR: hrs.length ? Math.round(hrs.reduce((a, b) => a + b, 0) / hrs.length) : null,
+      avgSpeed: spds.length ? parseFloat((spds.reduce((a, b) => a + b, 0) / spds.length).toFixed(1)) : null,
+      dist: parseFloat(lapDist.toFixed(2)), durSec: Math.round(durSec),
+    });
+  }
+  return laps;
+}
+
+// ── ZONE CALC ──────────────────────────────────────────────────────────────
+function calcZones(powers, ftp) {
+  const zones = [0, 0, 0, 0, 0, 0];
+  powers.forEach(p => {
+    const pct = p / ftp;
+    if (pct < 0.56) zones[0]++;
+    else if (pct < 0.76) zones[1]++;
+    else if (pct < 0.91) zones[2]++;
+    else if (pct < 1.06) zones[3]++;
+    else if (pct < 1.21) zones[4]++;
+    else zones[5]++;
+  });
+  return zones;
+}
+
+function getZoneName(power, ftp) {
+  const pct = power / ftp;
+  if (pct < 0.56) return 'Z1'; if (pct < 0.76) return 'Z2';
+  if (pct < 0.91) return 'Z3'; if (pct < 1.06) return 'Z4';
+  if (pct < 1.21) return 'Z5'; return 'Z6';
+}
+
+// ── PROCESS RIDE ───────────────────────────────────────────────────────────
+function processRide(points, filename, fitLaps) {
+  if (points.length < 5) { toast('Not enough data points'); return; }
+  const valid = points.filter(p => p.time || p.hr || p.power || p.speed);
+  const powers = valid.map(p => p.power || 0).filter(p => p > 0);
+  const hrs    = valid.map(p => p.hr || 0).filter(h => h > 0);
+  const speeds = valid.map(p => p.speed || 0).filter(s => s > 0);
+  let distMiles = 0;
+  const lastDist = valid[valid.length - 1] && valid[valid.length - 1].distance;
+  if (lastDist && lastDist > 0.1) {
+    distMiles = lastDist;
+  } else {
+    for (let i = 1; i < valid.length; i++) {
+      if (valid[i].lat && valid[i - 1].lat) distMiles += haversine(valid[i - 1].lat, valid[i - 1].lon, valid[i].lat, valid[i].lon);
+    }
+  }
+  if (distMiles < 0.1 && speeds.length) distMiles = (speeds.reduce((a, b) => a + b, 0) / speeds.length) * (valid.length / 3600);
+  let durationSec = 0;
+  if (valid[0] && valid[0].time && valid[valid.length - 1] && valid[valid.length - 1].time) durationSec = (valid[valid.length - 1].time - valid[0].time) / 1000;
+  else durationSec = valid.length;
+  const avgPower = powers.length ? Math.round(powers.reduce((a, b) => a + b, 0) / powers.length) : null;
+  const maxPower = powers.length ? Math.max(...powers) : null;
+  const avgHR    = hrs.length   ? Math.round(hrs.reduce((a, b) => a + b, 0) / hrs.length) : null;
+  const maxHR    = hrs.length   ? Math.max(...hrs) : null;
+  const avgSpeed = speeds.length ? speeds.reduce((a, b) => a + b, 0) / speeds.length : null;
+  let np = null;
+  if (powers.length > 30) {
+    const w = 30, rolling = [];
+    for (let i = w; i < powers.length; i++) { const sl = powers.slice(i - w, i); rolling.push(sl.reduce((a, b) => a + b, 0) / w); }
+    const fourth = rolling.map(p => Math.pow(p, 4));
+    np = Math.round(Math.pow(fourth.reduce((a, b) => a + b, 0) / fourth.length, 0.25));
+  }
+  const IF  = np && ftp ? parseFloat((np / ftp).toFixed(2)) : null;
+  const tss = np && ftp && IF ? Math.round((durationSec * np * IF) / (ftp * 3600) * 100) : null;
+  const zones = calcZones(powers, ftp);
+  const hillPasses = detectHillPasses(valid, 54);
+  let laps;
+  if (fitLaps && fitLaps.length > 1) {
+    laps = fitLaps.map((lap, idx) => ({ num: idx + 1, ...lap }));
+  } else {
+    laps = detectLaps(valid, distMiles);
+  }
+  const ride = {
+    id: Date.now(), filename, date: valid[0] && valid[0].time ? valid[0].time.toISOString() : new Date().toISOString(),
+    points: valid, hillPasses, laps,
+    metrics: { avgPower, maxPower, np, IF, tss, avgHR, maxHR, avgSpeed, distMiles: parseFloat(distMiles.toFixed(2)), durationSec, zones },
+  };
+  currentRide = ride;
+  const rideForStorage = { ...ride, points: [] };
+  const existing = rides.findIndex(r => r.filename === filename);
+  if (existing >= 0) rides[existing] = rideForStorage; else rides.push(rideForStorage);
+  if (rides.length > 50) rides = rides.slice(-50);
+  localStorage.setItem('rides', JSON.stringify(rides));
+  renderAnalysis(ride);
+  renderSegments(ride);
+  renderProgress();
+  toast('Loaded: ' + filename);
+  showTab('analysis');
+}
+
+// ── DOWNSAMPLE / DESTROY ───────────────────────────────────────────────────
+function downsample(arr, n) {
+  if (arr.length <= n) return arr;
+  const step = arr.length / n;
+  return Array.from({ length: n }, (_, i) => arr[Math.floor(i * step)]);
+}
+
+function destroyChart(id) { if (charts[id]) { charts[id].destroy(); delete charts[id]; } }
+
+// ── RENDER ANALYSIS ────────────────────────────────────────────────────────
+function renderAnalysis(ride) {
+  const { metrics, points } = ride;
+  document.getElementById('analysisEmpty').style.display = 'none';
+  document.getElementById('analysisContent').style.display = 'block';
+  const fmtTime = s => { if (!s) return '--'; const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60); return h > 0 ? h + ':' + String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0') : m + ':' + String(sec).padStart(2, '0'); };
+  const statDefs = [
+    { label: 'Distance',   value: metrics.distMiles ? metrics.distMiles + 'mi' : '--',      color: 'var(--accent)' },
+    { label: 'Duration',   value: fmtTime(metrics.durationSec),                              color: 'var(--accent2)' },
+    { label: 'Avg Power',  value: metrics.avgPower ? metrics.avgPower + 'w' : '--',          sub: metrics.avgPower ? Math.round(metrics.avgPower / ftp * 100) + '% FTP' : '', color: 'var(--accent)' },
+    { label: 'Norm Power', value: metrics.np ? metrics.np + 'w' : '--',                      sub: metrics.IF ? 'IF: ' + metrics.IF : '', color: 'var(--accent3)' },
+    { label: 'Peak Power', value: metrics.maxPower ? metrics.maxPower + 'w' : '--',          color: 'var(--accent)' },
+    { label: 'TSS',        value: metrics.tss || '--',                                        color: 'var(--accent3)' },
+    { label: 'Avg HR',     value: metrics.avgHR ? metrics.avgHR + 'bpm' : '--',              color: 'var(--accent2)' },
+    { label: 'Max HR',     value: metrics.maxHR ? metrics.maxHR + 'bpm' : '--',              color: 'var(--danger)' },
+    { label: 'Avg Speed',  value: metrics.avgSpeed ? parseFloat(metrics.avgSpeed).toFixed(1) + 'mph' : '--', color: 'var(--accent2)' },
+  ];
+  document.getElementById('statsGrid').innerHTML = statDefs.map(s => '<div class="stat-card" style="--accent-color:' + s.color + '"><div class="stat-label">' + s.label + '</div><div class="stat-value">' + s.value + '</div>' + (s.sub ? '<div class="stat-sub">' + s.sub + '</div>' : '') + '</div>').join('');
+  const ds = downsample(points, 300);
+  const labels = ds.map((p, i) => { if (p.time) { const m = Math.floor((p.time - points[0].time) / 60000); return m + 'm'; } return Math.round(i * metrics.durationSec / ds.length / 60) + 'm'; });
+  ['powerChart','hrChart','speedChart','scatterChart'].forEach(destroyChart);
+  const co = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1e2028', titleColor: '#e8eaf0', bodyColor: '#6b7080', borderColor: '#2a2d35', borderWidth: 1 } }, scales: { x: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 }, maxTicksLimit: 8 }, grid: { color: '#1e2028' } }, y: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } } } };
+  if (ds.some(p => p.power > 0)) { charts.powerChart = new Chart(document.getElementById('powerChart'), { type: 'line', data: { labels, datasets: [{ data: ds.map(p => p.power || 0), borderColor: '#c8f060', borderWidth: 1.5, backgroundColor: 'rgba(200,240,96,0.08)', fill: true, pointRadius: 0, tension: 0.3 }, { data: Array(labels.length).fill(ftp), borderColor: 'rgba(200,240,96,0.3)', borderWidth: 1, borderDash: [4, 4], pointRadius: 0, fill: false }] }, options: co }); }
+  if (ds.some(p => p.hr > 0)) { charts.hrChart = new Chart(document.getElementById('hrChart'), { type: 'line', data: { labels, datasets: [{ data: ds.map(p => p.hr || null), borderColor: '#f06060', borderWidth: 1.5, backgroundColor: 'rgba(240,96,96,0.08)', fill: true, pointRadius: 0, tension: 0.4, spanGaps: true }] }, options: co }); }
+  if (ds.some(p => p.speed > 0)) { charts.speedChart = new Chart(document.getElementById('speedChart'), { type: 'line', data: { labels, datasets: [{ data: ds.map(p => p.speed ? parseFloat(p.speed.toFixed(1)) : null), borderColor: '#60c8f0', borderWidth: 1.5, backgroundColor: 'rgba(96,200,240,0.08)', fill: true, pointRadius: 0, tension: 0.3, spanGaps: true }] }, options: co }); }
+  if (ds.some(p => p.power > 0 && p.hr > 0)) { charts.scatterChart = new Chart(document.getElementById('scatterChart'), { type: 'scatter', data: { datasets: [{ data: ds.filter(p => p.power > 20 && p.hr > 60).map(p => ({ x: p.power, y: p.hr })), backgroundColor: 'rgba(200,240,96,0.4)', pointRadius: 3, pointHoverRadius: 5 }] }, options: { ...co, scales: { x: { title: { display: true, text: 'Power (w)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } }, y: { title: { display: true, text: 'Heart Rate (bpm)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } } } } }); }
+  const zoneColors = ['#6b7080','#60c8f0','#c8f060','#f0a060','#f06060','#ff3030'];
+  const zoneNames  = ['Z1','Z2','Z3','Z4','Z5','Z6'];
+  const total = metrics.zones.reduce((a, b) => a + b, 0) || 1;
+  document.getElementById('zoneBars').innerHTML = metrics.zones.map((z, i) => { const pct = Math.round(z / total * 100); return '<div class="zone-bar-row"><div class="zone-bar-label" style="color:' + zoneColors[i] + ';font-size:9px;">' + zoneNames[i] + '</div><div class="zone-bar-track"><div class="zone-bar-fill" style="width:' + pct + '%;background:' + zoneColors[i] + '"></div></div><div class="zone-bar-pct">' + pct + '%</div></div>'; }).join('');
+}
+
+// ── RENDER SEGMENTS ────────────────────────────────────────────────────────
+function renderSegments(ride) {
+  if (!ride) return;
+  document.getElementById('segmentsEmpty').style.display = 'none';
+  document.getElementById('segmentsContent').style.display = 'block';
+  const existing = document.querySelectorAll('.hill-passes-section');
+  existing.forEach(el => el.remove());
+  const fmtTime = s => { const m = Math.floor(s / 60), sec = Math.floor(s % 60); return m + ':' + String(sec).padStart(2, '0'); };
+  const { laps, metrics } = ride;
+  const benchTargets = [
+    { label: 'Baseline', target: 155, targetSpeed: 11.2, targetHR: 144, targetWatts: 168 },
+    { label: 'Test 2 — May 27', target: 140, targetSpeed: 12.0, targetHR: 142, targetWatts: 178 },
+    { label: 'Test 3 — Jun 12', target: 130, targetSpeed: 13.0, targetHR: 140, targetWatts: 188 },
+    { label: 'Final — Jul 5',   target: 120, targetSpeed: 13.8, targetHR: 138, targetWatts: 198 },
+  ];
+  const passes = ride.hillPasses || [];
+  const bestPass = passes.length ? passes.reduce((b, p) => p.durSec < b.durSec ? p : b, passes[0]) : null;
+  document.getElementById('benchmarkRow').innerHTML = benchTargets.map((b, i) => {
+    const isThis = i === 0 && bestPass;
+    return '<div class="bench-card ' + (isThis ? 'achieved' : 'pending') + '"><div class="date">' + b.label + '</div><div class="time">' + (isThis ? fmtTime(bestPass.durSec) : 'sub ' + fmtTime(b.target)) + '</div><div class="meta">' + (isThis ? (bestPass.avgSpeed || '--') + 'mph · ' + (bestPass.avgHR || '--') + 'bpm' : '>' + b.targetSpeed + 'mph · <' + b.targetHR + 'bpm') + '</div><div class="target">target: ' + fmtTime(b.target) + ' · ' + b.targetWatts + 'w</div></div>';
+  }).join('');
+  if (!laps.length) { document.getElementById('segTableBody').innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:24px;">No lap data detected</td></tr>'; return; }
+  const bestLapPower = laps.reduce((best, l) => l.avgPower > (best && best.avgPower || 0) ? l : best, null);
+  document.getElementById('segTableBody').innerHTML = laps.map(lap => {
+    const pctFTP = lap.avgPower ? Math.round(lap.avgPower / ftp * 100) : null;
+    const isBest = lap === bestLapPower;
+    const zone = lap.avgPower ? getZoneName(lap.avgPower, ftp) : '--';
+    return '<tr><td><span class="seg-name">Lap ' + lap.num + (lap.name ? ' · ' + lap.name : '') + '</span></td><td>' + fmtTime(lap.durSec || 0) + '</td><td class="' + (isBest ? 'seg-best' : '') + '">' + (lap.avgPower ? lap.avgPower + 'w' : '--') + '</td><td>' + (pctFTP ? '<span class="pill">' + pctFTP + '%</span>' : '--') + '</td><td>' + (lap.avgHR ? lap.avgHR + 'bpm' : '--') + '</td><td>' + (lap.avgSpeed ? lap.avgSpeed + 'mph' : '--') + '</td><td>' + (lap.maxPower ? lap.maxPower + 'w' : '--') + '</td><td><span class="pill ' + (pctFTP > 90 ? 'orange' : pctFTP > 75 ? 'blue' : '') + '">' + zone + '</span></td></tr>';
+  }).join('');
+  if (passes.length) {
+    const hillDiv = document.createElement('div');
+    hillDiv.className = 'hill-passes-section';
+    const bestDur = Math.min(...passes.map(p => p.durSec));
+    hillDiv.innerHTML = '<div class="section-title" style="margin-top:28px;margin-bottom:16px;">PP Hill passes — ' + passes.length + ' detected this ride</div>'
+      + '<div class="chart-card" style="margin-bottom:16px;"><table class="seg-table"><thead><tr><th>Pass</th><th>Time</th><th>Avg Power</th><th>Peak Power</th><th>w/kg</th><th>Avg HR</th><th>Avg Speed</th><th>VAM</th><th>HR/watt</th></tr></thead><tbody>'
+      + passes.map(p => '<tr><td>Pass ' + p.num + '</td><td class="' + (p.durSec === bestDur ? 'seg-best' : '') + '">' + fmtTime(p.durSec) + '</td><td>' + (p.avgPower ? p.avgPower + 'w' : '--') + '</td><td>' + (p.maxPower ? p.maxPower + 'w' : '--') + '</td><td><span class="pill ' + (p.wPerKg >= 3 ? '' : p.wPerKg >= 2.5 ? 'blue' : 'orange') + '">' + (p.wPerKg || '--') + '</span></td><td>' + (p.avgHR ? p.avgHR + 'bpm' : '--') + '</td><td>' + (p.avgSpeed ? p.avgSpeed + 'mph' : '--') + '</td><td>' + (p.vam ? p.vam + 'm/hr' : '--') + '</td><td>' + (p.cardiacCost || '--') + '</td></tr>').join('')
+      + '</tbody></table></div>';
+    document.getElementById('segmentsContent').appendChild(hillDiv);
+  }
+  destroyChart('lapChart');
+  if (laps.length && laps.some(l => l.avgPower)) {
+    charts.lapChart = new Chart(document.getElementById('lapChart'), { type: 'bar', data: { labels: laps.map(l => 'Lap ' + l.num), datasets: [{ label: 'Avg Power (w)', data: laps.map(l => l.avgPower || 0), backgroundColor: laps.map(l => l === bestLapPower ? '#c8f060' : 'rgba(200,240,96,0.3)'), borderRadius: 4 }, { label: 'Avg HR (bpm)', data: laps.map(l => l.avgHR || 0), backgroundColor: 'rgba(240,96,96,0.4)', borderRadius: 4, yAxisID: 'y1' }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }, tooltip: { backgroundColor: '#1e2028', titleColor: '#e8eaf0', bodyColor: '#6b7080', borderColor: '#2a2d35', borderWidth: 1 } }, scales: { x: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } }, y: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } }, y1: { position: 'right', ticks: { color: '#f06060', font: { family: 'DM Mono', size: 10 } }, grid: { display: false } } } } });
+  }
+}
+
+// ── RENDER PROGRESS ────────────────────────────────────────────────────────
+function renderProgress() {
+  const stravaActivities = JSON.parse(localStorage.getItem('strava_activities') || '[]');
+  const localRides = rides.filter(r => r.metrics);
+  let allRides = [];
+  if (stravaActivities.length) {
+    allRides = stravaActivities.filter(a => !['run','walk','hike'].includes((a.type || '').toLowerCase())).map(a => ({
+      date: a.date, filename: a.name, zwift: a.zwift,
+      metrics: { distMiles: a.distMiles, durationSec: a.durationSec, avgPower: a.avgPower, np: a.np, avgHR: a.avgHR, maxHR: a.maxHR, avgSpeed: a.avgSpeed, elevGainFt: a.elevGainFt, tss: null, zones: [0,0,0,0,0,0] },
+      hillPasses: [], id: a.id,
+    }));
+  } else { allRides = localRides; }
+  if (allRides.length < 1) {
+    document.getElementById('progressEmpty').style.display = 'block';
+    document.getElementById('progressContent').style.display = 'none';
+    return;
+  }
+  document.getElementById('progressEmpty').style.display = 'none';
+  document.getElementById('progressContent').style.display = 'block';
+  const sorted = [...allRides].sort((a, b) => new Date(a.date) - new Date(b.date));
+  const fmtLabel = d => new Date((d || '').includes('T') ? d : d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const labels = sorted.map(r => fmtLabel(r.date));
+  const pOpts = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1e2028', titleColor: '#e8eaf0', bodyColor: '#6b7080' } }, scales: { x: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 }, maxTicksLimit: 12 }, grid: { color: '#2a2d35' } }, y: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } } } };
+  const outdoorRides = sorted.filter(r => !r.zwift && (r.metrics.np || r.metrics.avgPower));
+  const zwiftRides   = sorted.filter(r =>  r.zwift && (r.metrics.np || r.metrics.avgPower));
+  const allDates = sorted.filter(r => r.metrics.np || r.metrics.avgPower).map(r => fmtLabel(r.date));
+  const uniqueDates = [...new Set(allDates)];
+  const dOut = {}, dZwift = {};
+  outdoorRides.forEach(r => { dOut[fmtLabel(r.date)] = r.metrics.np || r.metrics.avgPower; });
+  zwiftRides.forEach(r   => { dZwift[fmtLabel(r.date)] = r.metrics.np || r.metrics.avgPower; });
+  ['progressPowerChart','progressHRChart','progressDistChart','progressElevChart','progressHillChart'].forEach(destroyChart);
+  const c1 = document.getElementById('progressPowerChart');
+  if (c1) charts.progressPowerChart = new Chart(c1, { type: 'line', data: { labels: uniqueDates, datasets: [{ label: 'Outdoor NP', data: uniqueDates.map(d => dOut[d] || null), borderColor: '#c8f060', backgroundColor: 'rgba(200,240,96,0.1)', fill: false, tension: 0.3, pointRadius: 4, pointBackgroundColor: '#c8f060', spanGaps: false, borderWidth: 2 }, { label: 'Zwift NP', data: uniqueDates.map(d => dZwift[d] || null), borderColor: '#60c8f0', fill: false, tension: 0.3, pointRadius: 4, pointBackgroundColor: '#60c8f0', spanGaps: false, borderDash: [4, 3], borderWidth: 1.5 }] }, options: { ...pOpts, plugins: { ...pOpts.plugins, legend: { labels: { color: '#6b7080', font: { family: 'DM Mono', size: 10 }, boxWidth: 12 } } } } });
+  const c2 = document.getElementById('progressHRChart');
+  if (c2) charts.progressHRChart = new Chart(c2, { type: 'line', data: { labels, datasets: [{ data: sorted.map(r => r.metrics.avgHR), borderColor: '#f06060', backgroundColor: 'rgba(240,96,96,0.1)', fill: true, tension: 0.3, pointRadius: 4, pointBackgroundColor: '#f06060' }] }, options: pOpts });
+  const c3 = document.getElementById('progressDistChart');
+  if (c3) charts.progressDistChart = new Chart(c3, { type: 'bar', data: { labels, datasets: [{ data: sorted.map(r => r.metrics.distMiles), backgroundColor: 'rgba(96,200,240,0.5)', borderRadius: 4 }] }, options: pOpts });
+  const elevData = sorted.map(r => r.metrics.elevGainFt || null);
+  if (elevData.some(v => v)) {
+    const c4 = document.getElementById('progressElevChart');
+    if (c4) charts.progressElevChart = new Chart(c4, { type: 'bar', data: { labels, datasets: [{ data: elevData, backgroundColor: 'rgba(240,160,96,0.5)', borderRadius: 4 }] }, options: { ...pOpts, scales: { ...pOpts.scales, y: { ...pOpts.scales.y, title: { display: true, text: 'ft', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } } } } });
+  }
+  const c5 = document.getElementById('progressHillChart');
+  if (c5) charts.progressHillChart = new Chart(c5, { type: 'line', data: { labels: ['Apr 25','May 27','Jun 12','Jul 5'], datasets: [{ label: 'Target', data: [155, 140, 130, 120], borderColor: 'rgba(200,240,96,0.3)', borderDash: [4, 4], pointRadius: 4, fill: false, tension: 0 }] }, options: { ...pOpts, scales: { ...pOpts.scales, y: { ...pOpts.scales.y, reverse: true, title: { display: true, text: 'seconds', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } } } } });
+  const fmtTime = s => { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h > 0 ? h + 'h ' + m + 'm' : m + 'm'; };
+  const outdoorSorted = sorted.filter(r => !r.zwift).reverse();
+  const zwiftSorted   = sorted.filter(r =>  r.zwift).reverse();
+  document.getElementById('allRidesList').innerHTML = outdoorSorted.map(r => '<div class="ride-row"><div class="ride-date">' + new Date((r.date || '').includes('T') ? r.date : r.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) + '</div><div class="ride-name">' + (r.filename || '').replace(/\.(fit|gpx|json)$/i, '') + '</div><div class="ride-stat">' + (r.metrics.distMiles || '--') + '<span>miles</span></div><div class="ride-stat">' + fmtTime(r.metrics.durationSec || 0) + '<span>time</span></div><div class="ride-stat">' + (r.metrics.np || r.metrics.avgPower || '--') + '<span>NP</span></div><div class="ride-stat">' + (r.metrics.avgHR || '--') + '<span>bpm</span></div><div class="ride-stat">' + (r.metrics.tss || '--') + '<span>TSS</span></div></div>').join('') || '<div style="color:var(--muted);text-align:center;padding:24px;font-family:var(--mono);font-size:12px;">No rides yet</div>';
+  const zwiftEl = document.getElementById('zwiftRidesList');
+  if (zwiftEl) zwiftEl.innerHTML = zwiftSorted.map(r => '<div class="ride-row"><div class="ride-date">' + new Date((r.date || '').includes('T') ? r.date : r.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) + '</div><div class="ride-name">' + (r.filename || '') + '</div><div class="ride-stat">' + (r.metrics.distMiles || '--') + '<span>miles</span></div><div class="ride-stat">' + fmtTime(r.metrics.durationSec || 0) + '<span>time</span></div><div class="ride-stat">' + (r.metrics.np || r.metrics.avgPower || '--') + '<span>NP</span></div><div class="ride-stat">' + (r.metrics.avgHR || '--') + '<span>bpm</span></div></div>').join('') || '<div style="color:var(--muted);padding:12px;font-family:var(--mono);font-size:12px;">No Zwift sessions yet</div>';
+}
+
+function renderStravaProgressInProgress() {
+  const segments   = JSON.parse(localStorage.getItem('strava_segments') || '[]');
+  const activities = JSON.parse(localStorage.getItem('strava_activities') || '[]');
+  const section = document.getElementById('progressHillSection');
+  if (!section) return;
+  const ppHill = segments.find(s => s.name && s.name.toLowerCase().includes('prospect park hill'));
+  if (!ppHill || !ppHill.efforts.length) { section.style.display = 'none'; return; }
+  section.style.display = 'block';
+  const byDate = {};
+  for (const eff of ppHill.efforts) {
+    const day = new Date(eff.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    if (!byDate[day]) byDate[day] = [];
+    byDate[day].push(eff.elapsed);
+  }
+  const days    = Object.keys(byDate).sort((a, b) => new Date(a + ' 2026') - new Date(b + ' 2026'));
+  const fastest = days.map(d => Math.min(...byDate[d]));
+  const average = days.map(d => Math.round(byDate[d].reduce((a, b) => a + b, 0) / byDate[d].length));
+  const counts  = days.map(d => byDate[d].length);
+  const pOpts = { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#6b7080', font: { family: 'DM Mono', size: 10 }, boxWidth: 12 } }, tooltip: { backgroundColor: '#1e2028', titleColor: '#e8eaf0', bodyColor: '#6b7080', callbacks: { label: ctx => ctx.dataset.label + ': ' + fmtSecs(ctx.raw) } } }, scales: { x: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } }, y: { reverse: true, ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 }, callback: v => fmtSecs(v) }, grid: { color: '#2a2d35' }, title: { display: true, text: 'lower = faster', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } } } };
+  destroyChart('progressHillStrava');
+  const c1 = document.getElementById('progressHillStrava');
+  if (c1) charts.progressHillStrava = new Chart(c1, { type: 'line', data: { labels: days.map((d, i) => d + (counts[i] > 1 ? ' (x' + counts[i] + ')' : '')), datasets: [{ label: 'Fastest', data: fastest, borderColor: '#c8f060', pointBackgroundColor: '#c8f060', fill: false, tension: 0.3, pointRadius: 5, borderWidth: 2 }, { label: 'Average', data: average, borderColor: '#60c8f0', pointBackgroundColor: '#60c8f0', fill: false, tension: 0.3, pointRadius: 4, borderDash: [4, 3], borderWidth: 1.5 }, { label: 'PR', data: days.map(() => ppHill.pr ? ppHill.pr.elapsed : null), borderColor: 'rgba(240,96,96,0.5)', pointRadius: 0, fill: false, borderDash: [6, 4], borderWidth: 1 }] }, options: pOpts });
+  const npData = [...activities].sort((a, b) => new Date(a.date) - new Date(b.date)).filter(a => a.np || a.avgPower).slice(-30);
+  destroyChart('progressNPStrava');
+  const c2 = document.getElementById('progressNPStrava');
+  if (c2 && npData.length) charts.progressNPStrava = new Chart(c2, { type: 'line', data: { labels: npData.map(a => new Date(a.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })), datasets: [{ label: 'NP', data: npData.map(a => a.np || a.avgPower), borderColor: '#c8f060', backgroundColor: 'rgba(200,240,96,0.1)', fill: true, tension: 0.3, pointRadius: 3, pointBackgroundColor: '#c8f060' }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1e2028', titleColor: '#e8eaf0', bodyColor: '#6b7080' } }, scales: { x: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } }, y: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' }, title: { display: true, text: 'NP (watts)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } } } } });
+}
+
+// ── TRAINING PLAN ──────────────────────────────────────────────────────────
+function getPlanStatus(date) { return JSON.parse(localStorage.getItem('plan_status') || '{}')[date] || 'pending'; }
+function setPlanStatus(date, status) { const s = JSON.parse(localStorage.getItem('plan_status') || '{}'); s[date] = status; localStorage.setItem('plan_status', JSON.stringify(s)); renderPlan(); }
+function matchStravaActivity(date) {
+  const activities = [...JSON.parse(localStorage.getItem('strava_activities') || '[]'), ...JSON.parse(localStorage.getItem('strava_runs') || '[]')];
+  const d = date.slice(0, 10);
+  return activities.filter(a => a.date && a.date.slice(0, 10) === d);
+}
+function renderPlan() {
+  const container = document.getElementById('planContainer');
+  if (!container) return;
+  const today  = new Date().toISOString().slice(0, 10);
+  const status = JSON.parse(localStorage.getItem('plan_status') || '{}');
+  const weeks  = {};
+  TRAINING_PLAN.forEach(w => { if (!weeks[w.wk]) weeks[w.wk] = []; weeks[w.wk].push(w); });
+  const total    = TRAINING_PLAN.length;
+  const done     = Object.values(status).filter(s => s === 'done').length;
+  const skipped  = Object.values(status).filter(s => s === 'skipped').length;
+  const past     = TRAINING_PLAN.filter(w => w.date < today).length;
+  const pct      = past > 0 ? Math.round(done / past * 100) : 0;
+  const weeksLeft = Math.max(0, Math.ceil((new Date('2026-07-13') - new Date()) / 604800000));
+  const typeColors = { race: '#f0a060', ride: '#60c8f0', run: '#c8f060', zwift: '#a060f0', rest: '#444', strength: '#f06060' };
+  const typeBg    = { race: 'rgba(240,160,96,0.08)', ride: 'rgba(96,200,240,0.06)', run: 'rgba(200,240,96,0.06)', zwift: 'rgba(160,96,240,0.06)', rest: 'rgba(255,255,255,0.02)', strength: 'rgba(240,96,96,0.06)' };
+  const fmtTime = s => { if (!s) return '--'; const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h > 0 ? h + 'h ' + m + 'm' : m + 'm'; };
+  let html = '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:28px;">'
+    + '<div class="stat-card" style="--accent-color:var(--accent)"><div class="stat-label">Completed</div><div class="stat-value">' + done + '<small>/' + past + ' past days</small></div><div class="stat-sub">' + pct + '% adherence</div></div>'
+    + '<div class="stat-card" style="--accent-color:var(--accent2)"><div class="stat-label">Remaining</div><div class="stat-value">' + (total - done - skipped) + '<small> workouts</small></div><div class="stat-sub">to Iceland Jul 13</div></div>'
+    + '<div class="stat-card" style="--accent-color:var(--accent3)"><div class="stat-label">Skipped</div><div class="stat-value">' + skipped + '</div></div>'
+    + '<div class="stat-card" style="--accent-color:var(--accent)"><div class="stat-label">Weeks to Iceland</div><div class="stat-value">' + weeksLeft + '</div><div class="stat-sub">departing Jul 13</div></div>'
+    + '</div>';
+  for (const [wk, days] of Object.entries(weeks)) {
+    html += '<div style="margin-bottom:24px;"><div style="font-family:var(--mono);font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);padding:6px 0 10px;border-bottom:1px solid var(--border);margin-bottom:10px;">Week ' + wk + '</div>';
+    for (const day of days) {
+      const st = status[day.date] || 'pending';
+      const isToday = day.date === today;
+      const color = typeColors[day.type] || '#888';
+      const bg    = typeBg[day.type] || 'rgba(255,255,255,0.02)';
+      const isBenchmark = day.workout.toLowerCase().includes('benchmark');
+      const matches = matchStravaActivity(day.date);
+      html += '<div style="display:grid;grid-template-columns:90px 16px 1fr auto;gap:10px;align-items:start;padding:10px 12px;border-radius:8px;margin-bottom:4px;background:' + bg + ';border:1px solid ' + (isToday ? color : st === 'done' ? 'rgba(200,240,96,0.2)' : 'var(--border)') + ';">'
+        + '<div><div style="font-family:var(--mono);font-size:10px;color:var(--muted);">' + day.day + ' ' + new Date(day.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + '</div>' + (isToday ? '<div style="font-family:var(--mono);font-size:9px;color:' + color + ';margin-top:2px;">TODAY</div>' : '') + '</div>'
+        + '<div style="width:3px;height:100%;border-radius:2px;background:' + color + ';margin-top:2px;min-height:16px;"></div>'
+        + '<div><div style="font-size:12px;color:var(--text);margin-bottom:3px;">' + (isBenchmark ? '📍 ' : '') + day.workout + '</div>' + (day.event ? '<div style="font-family:var(--mono);font-size:10px;color:' + color + ';">' + day.event + '</div>' : '') + '<div style="font-size:11px;color:var(--muted);margin-top:2px;">' + day.target + '</div>'
+        + matches.map(a => '<div style="margin-top:6px;padding:6px 10px;background:rgba(200,240,96,0.06);border:1px solid rgba(200,240,96,0.2);border-radius:5px;display:flex;gap:16px;flex-wrap:wrap;"><span style="font-family:var(--mono);font-size:10px;color:var(--accent);">✓ ' + a.name + '</span>' + (a.distMiles ? '<span style="font-family:var(--mono);font-size:10px;color:var(--muted);">' + a.distMiles + 'mi</span>' : '') + (a.durationSec ? '<span style="font-family:var(--mono);font-size:10px;color:var(--muted);">' + fmtTime(a.durationSec) + '</span>' : '') + ((a.np || a.avgPower) ? '<span style="font-family:var(--mono);font-size:10px;color:var(--muted);">' + (a.np || a.avgPower) + 'w NP</span>' : '') + (a.avgHR ? '<span style="font-family:var(--mono);font-size:10px;color:var(--muted);">' + Math.round(a.avgHR) + 'bpm</span>' : '') + '</div>').join('')
+        + '</div>'
+        + '<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;">'
+        + '<button onclick="setPlanStatus(\'' + day.date + '\',\'' + (st === 'done' ? 'pending' : 'done') + '\')" style="background:' + (st === 'done' ? 'rgba(200,240,96,0.15)' : 'var(--surface2)') + ';border:1px solid ' + (st === 'done' ? 'var(--accent)' : 'var(--border)') + ';color:' + (st === 'done' ? 'var(--accent)' : 'var(--muted)') + ';font-family:var(--mono);font-size:10px;padding:4px 10px;border-radius:4px;cursor:pointer;white-space:nowrap;">' + (st === 'done' ? '✓ Done' : 'Mark done') + '</button>'
+        + '<button onclick="setPlanStatus(\'' + day.date + '\',\'' + (st === 'skipped' ? 'pending' : 'skipped') + '\')" style="background:' + (st === 'skipped' ? 'rgba(240,96,96,0.1)' : 'var(--surface2)') + ';border:1px solid ' + (st === 'skipped' ? 'var(--danger)' : 'var(--border)') + ';color:' + (st === 'skipped' ? 'var(--danger)' : 'var(--muted)') + ';font-family:var(--mono);font-size:10px;padding:4px 10px;border-radius:4px;cursor:pointer;">' + (st === 'skipped' ? '× Skipped' : 'Skip') + '</button>'
+        + '</div></div>';
+    }
+    html += '</div>';
+  }
+  container.innerHTML = html;
+}
+
+// ── INIT ───────────────────────────────────────────────────────────────────
 renderStravaButton();
 handleStravaCallback();
 if (isStravaConnected()) { renderStravaProgressInProgress(); loadLatestStravaActivity(); }
 renderPlan();
 renderProgress();
+
 </script>
 </body>
 </html>
