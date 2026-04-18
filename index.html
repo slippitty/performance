@@ -569,6 +569,63 @@
   <div id="planContainer"></div>
 </div>
 
+
+<!-- STATS TAB -->
+<div id="tab-stats" class="tab-panel">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;">
+    <div>
+      <div style="font-family:var(--serif);font-size:1.4rem;font-weight:400;">Combo Stats</div>
+      <div style="font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:4px;">Power · HR · Gradient · Speed · Efficiency · 54kg / 119lbs</div>
+    </div>
+    <div id="statsNoData" style="font-family:var(--mono);font-size:11px;color:var(--muted);">Sync Strava to populate</div>
+  </div>
+
+  <div id="statsContent">
+    <div class="chart-row">
+      <div class="chart-card">
+        <h4>Power distribution — all outdoor rides</h4>
+        <div class="chart-wrap"><canvas id="statsPowerDist"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <h4>HR vs Normalized Power — efficiency over time</h4>
+        <div class="chart-wrap"><canvas id="statsHRvsPower"></canvas></div>
+      </div>
+    </div>
+
+    <div class="chart-row">
+      <div class="chart-card">
+        <h4>Avg speed by ride distance — aerobic base</h4>
+        <div class="chart-wrap"><canvas id="statsSpeedVsDist"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <h4>Cardiac efficiency — HR per watt (lower = fitter)</h4>
+        <div class="chart-wrap"><canvas id="statsCardiac"></canvas></div>
+      </div>
+    </div>
+
+    <div class="chart-row">
+      <div class="chart-card">
+        <h4>PP Hill — power vs time (each effort)</h4>
+        <div class="chart-wrap"><canvas id="statsHillPower"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <h4>PP Hill — HR vs time (each effort)</h4>
+        <div class="chart-wrap"><canvas id="statsHillHR"></canvas></div>
+      </div>
+    </div>
+
+    <div class="chart-row single">
+      <div class="chart-card">
+        <h4>Elevation gain vs NP — climbing load per ride</h4>
+        <div class="chart-wrap tall"><canvas id="statsElevVsNP"></canvas></div>
+      </div>
+    </div>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;margin-top:8px;" id="statsKeyNumbers">
+    </div>
+  </div>
+</div>
+
 </main>
 
 <div class="toast" id="toast"></div>
@@ -673,6 +730,15 @@ const TRAINING_PLAN = [
   {wk:12,date:'2026-07-12',day:'Sun',event:'',workout:'REST',type:'rest',target:'Full rest. Iceland tomorrow.'},
 ];
 
+// ── PINNED SEGMENTS ───────────────────────────────────────────────────────
+const PINNED_SEGMENTS = [
+  { id: '613198',   name: 'Prospect Park hill',      note: 'Main benchmark' },
+  { id: '39272234', name: 'Not Villa Shops',          note: '' },
+  { id: '18490324', name: 'PP post-downhill turn',    note: '' },
+  { id: '5313629',  name: 'Prospect Park race lap',   note: '' },
+  { id: '18022048', name: '3rd Street lap',           note: '' },
+];
+
 const STRAVA_CLIENT_ID     = '226635';
 const STRAVA_CLIENT_SECRET = '02bd23b5558d74cc2c24958f18b2b77d57042247';
 const STRAVA_REDIRECT_URI  = 'https://slippitty.github.io/performance/';
@@ -706,6 +772,7 @@ function showTab(name) {
   if (name === 'analysis')  { if (currentRide) renderAnalysis(currentRide); else loadLatestStravaActivity(); }
   if (name === 'strava')    { renderStravaButton(); if (isStravaConnected()) { renderStravaContent(); renderStravaProgress(); } }
   if (name === 'plan')      { renderPlan(); }
+  if (name === 'stats')     { renderComboStats(); }
 }
 
 // ── TOAST ──────────────────────────────────────────────────────────────────
@@ -876,6 +943,47 @@ async function loadStravaActivities() {
       }
     }
 
+    // Always fetch pinned segments by ID + their full effort history
+    setMsg('Loading pinned segment histories...');
+    for (const pinned of PINNED_SEGMENTS) {
+      const sid = pinned.id;
+      if (!segMap[sid]) {
+        segMap[sid] = { id: sid, name: pinned.name, distMi: 0, grade: 0, starred: true, efforts: [], pinned: true };
+      }
+      segMap[sid].pinned = true;
+      segMap[sid].starred = true;
+      // Fetch segment info for PR
+      const info = await stravaFetch('/segments/' + sid);
+      if (info) {
+        segMap[sid].distMi = parseFloat((info.distance * 0.000621371).toFixed(2));
+        segMap[sid].grade  = info.average_grade;
+        segMap[sid].pr     = info.athlete_pr_effort ? { elapsed: info.athlete_pr_effort.elapsed_time, date: info.athlete_pr_effort.start_date_local } : null;
+        segMap[sid].kom    = (info.xoms && info.xoms.kom) ? info.xoms.kom : null;
+      }
+      // Fetch all efforts for this athlete on this segment (up to 200)
+      const efforts = await stravaFetch('/segment_efforts?segment_id=' + sid + '&per_page=200');
+      if (efforts && efforts.length) {
+        // Merge with existing efforts, dedup by start date
+        const existing = new Set(segMap[sid].efforts.map(e => e.date));
+        for (const eff of efforts) {
+          const date = eff.start_date_local;
+          if (!existing.has(date)) {
+            segMap[sid].efforts.push({
+              date,
+              actId: eff.activity && eff.activity.id,
+              actName: eff.name,
+              elapsed: eff.elapsed_time,
+              avgPower: eff.average_watts ? Math.round(eff.average_watts) : null,
+              avgHR: eff.average_heartrate ? Math.round(eff.average_heartrate) : null,
+              avgSpeed: eff.average_speed ? parseFloat((eff.average_speed * 2.23694).toFixed(1)) : null,
+              prRank: eff.pr_rank || null,
+            });
+            existing.add(date);
+          }
+        }
+      }
+    }
+
     localStorage.setItem('strava_segments', JSON.stringify(Object.values(segMap)));
     renderStravaContent();
     renderStravaProgress();
@@ -893,39 +1001,64 @@ function renderStravaContent() {
   if (!content) return;
   content.style.display = 'block';
   const segments = JSON.parse(localStorage.getItem('strava_segments') || '[]');
-  const starred  = segments.filter(s => s.starred).sort((a, b) => b.efforts.length - a.efforts.length);
+
+  // Show pinned segments first, then other starred
+  const pinnedIds = new Set(PINNED_SEGMENTS.map(p => p.id));
+  const pinned  = PINNED_SEGMENTS.map(p => segments.find(s => String(s.id) === p.id)).filter(Boolean);
+  const starred = segments.filter(s => s.starred && !pinnedIds.has(String(s.id))).sort((a, b) => b.efforts.length - a.efforts.length);
+  const all = [...pinned, ...starred];
 
   const fmtDate = d => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
-  let segsHTML = '';
-  if (!starred.length) {
-    segsHTML = '<div style="text-align:center;padding:40px 20px;"><div style="font-family:var(--serif);font-size:1.2rem;margin-bottom:8px;">No starred segments yet</div><div style="color:var(--muted);font-size:13px;">Star segments on Strava then hit Sync.</div></div>';
-  } else {
-    segsHTML = '<div class="section-title" style="margin-bottom:12px;">Starred segments</div>'
-      + '<div class="chart-card" style="margin-bottom:20px;overflow-x:auto;">'
-      + '<table class="seg-table"><thead><tr>'
-      + '<th>Segment</th><th>Dist</th><th>Grade</th><th>Best this block</th><th>Your PR</th><th>Efforts</th><th>Last</th><th>Avg Power</th><th>Avg HR</th>'
-      + '</tr></thead><tbody>';
-    for (const seg of starred.slice(0, 30)) {
-      const efforts = [...seg.efforts].sort((a, b) => a.elapsed - b.elapsed);
-      const best = efforts[0] || null;
-      const last = [...seg.efforts].sort((a, b) => new Date(b.date) - new Date(a.date))[0] || null;
-      const isPR = best && seg.pr && best.elapsed <= seg.pr.elapsed;
-      segsHTML += '<tr>'
-        + '<td><span class="seg-name">' + seg.name + '</span></td>'
-        + '<td>' + seg.distMi + 'mi</td>'
-        + '<td>' + (seg.grade || 0).toFixed(1) + '%</td>'
-        + '<td class="' + (isPR ? 'seg-best' : '') + '">' + (best ? fmtSecs(best.elapsed) : '--') + (best && best.prRank === 1 ? ' <span class="pill">PR</span>' : '') + '</td>'
-        + '<td>' + (seg.pr ? fmtSecs(seg.pr.elapsed) + ' <span style="font-size:10px;color:var(--muted);">(' + fmtDate(seg.pr.date) + ')</span>' : '--') + '</td>'
-        + '<td>' + seg.efforts.length + '</td>'
-        + '<td>' + (last ? fmtDate(last.date) : '--') + '</td>'
-        + '<td>' + (best && best.avgPower ? best.avgPower + 'w' : '--') + '</td>'
-        + '<td>' + (best && best.avgHR ? best.avgHR + 'bpm' : '--') + '</td>'
-        + '</tr>';
-    }
-    segsHTML += '</tbody></table></div>';
+  if (!all.length) {
+    content.innerHTML = '<div style="text-align:center;padding:40px 20px;"><div style="font-family:var(--serif);font-size:1.2rem;margin-bottom:8px;">No segments yet</div><div style="color:var(--muted);font-size:13px;">Hit Sync to load segment history.</div></div>';
+    return;
   }
-  content.innerHTML = segsHTML;
+
+  let html = '';
+  for (const seg of all) {
+    if (!seg.efforts.length) continue;
+    const sorted  = [...seg.efforts].sort((a, b) => a.elapsed - b.elapsed);
+    const best    = sorted[0];
+    const recent  = [...seg.efforts].sort((a, b) => new Date(b.date) - new Date(a.date));
+    const last5   = recent.slice(0, 5);
+    const avgElapsed = Math.round(seg.efforts.reduce((s, e) => s + e.elapsed, 0) / seg.efforts.length);
+    const avgPwr  = seg.efforts.filter(e => e.avgPower).length ? Math.round(seg.efforts.filter(e=>e.avgPower).reduce((s,e)=>s+e.avgPower,0)/seg.efforts.filter(e=>e.avgPower).length) : null;
+    const avgHR   = seg.efforts.filter(e => e.avgHR).length ? Math.round(seg.efforts.filter(e=>e.avgHR).reduce((s,e)=>s+e.avgHR,0)/seg.efforts.filter(e=>e.avgHR).length) : null;
+    const isPinned = pinnedIds.has(String(seg.id));
+    const isPR    = best && seg.pr && best.elapsed <= seg.pr.elapsed;
+    const trend   = last5.length >= 2 ? last5[0].elapsed - last5[last5.length-1].elapsed : 0; // negative = getting faster
+
+    html += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin-bottom:16px;">'
+      // Header row
+      + '<div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:12px;">'
+      + '<div><span style="font-size:14px;color:var(--text);">' + (isPinned ? '📍 ' : '') + seg.name + '</span>'
+      + '<span style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-left:10px;">' + seg.distMi + 'mi · ' + (seg.grade||0).toFixed(1) + '% grade · ' + seg.efforts.length + ' efforts</span></div>'
+      + (trend < -2 ? '<span style="font-family:var(--mono);font-size:10px;color:var(--accent);">↑ trending faster</span>' : trend > 2 ? '<span style="font-family:var(--mono);font-size:10px;color:var(--danger);">↓ trending slower</span>' : '')
+      + '</div>'
+      // Stats row
+      + '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:14px;">'
+      + '<div style="background:var(--surface2);border-radius:6px;padding:10px 12px;"><div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:0.08em;margin-bottom:4px;">BEST</div><div style="font-family:var(--mono);font-size:18px;color:var(--accent);">' + fmtSecs(best.elapsed) + '</div><div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:2px;">' + fmtDate(best.date) + (isPR ? ' · PR' : '') + '</div></div>'
+      + '<div style="background:var(--surface2);border-radius:6px;padding:10px 12px;"><div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:0.08em;margin-bottom:4px;">AVERAGE</div><div style="font-family:var(--mono);font-size:18px;color:var(--text);">' + fmtSecs(avgElapsed) + '</div><div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:2px;">all ' + seg.efforts.length + ' efforts</div></div>'
+      + '<div style="background:var(--surface2);border-radius:6px;padding:10px 12px;"><div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:0.08em;margin-bottom:4px;">ALL-TIME PR</div><div style="font-family:var(--mono);font-size:18px;color:var(--text);">' + (seg.pr ? fmtSecs(seg.pr.elapsed) : '--') + '</div><div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:2px;">' + (seg.pr ? fmtDate(seg.pr.date) : '') + '</div></div>'
+      + '<div style="background:var(--surface2);border-radius:6px;padding:10px 12px;"><div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:0.08em;margin-bottom:4px;">AVG POWER</div><div style="font-family:var(--mono);font-size:18px;color:var(--text);">' + (avgPwr ? avgPwr + 'w' : '--') + '</div><div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:2px;">' + (avgPwr && ftp ? Math.round(avgPwr/ftp*100) + '% FTP' : '') + '</div></div>'
+      + '<div style="background:var(--surface2);border-radius:6px;padding:10px 12px;"><div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:0.08em;margin-bottom:4px;">AVG HR</div><div style="font-family:var(--mono);font-size:18px;color:var(--text);">' + (avgHR ? avgHR + 'bpm' : '--') + '</div></div>'
+      + '</div>'
+      // Recent efforts row
+      + '<div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:0.08em;margin-bottom:6px;">RECENT EFFORTS</div>'
+      + '<div style="display:flex;gap:8px;flex-wrap:wrap;">'
+      + last5.map(e => {
+          const isBest = e === best;
+          const diff = e.elapsed - best.elapsed;
+          return '<div style="background:var(--surface2);border:1px solid ' + (isBest ? 'var(--accent)' : 'var(--border)') + ';border-radius:5px;padding:6px 10px;min-width:120px;">'
+            + '<div style="font-family:var(--mono);font-size:11px;color:' + (isBest ? 'var(--accent)' : 'var(--text)') + ';">' + fmtSecs(e.elapsed) + (isBest ? ' ★' : diff <= 5 ? ' <span style="color:var(--accent);font-size:9px;">+' + diff + 's</span>' : ' <span style="color:var(--muted);font-size:9px;">+' + diff + 's</span>') + '</div>'
+            + '<div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:2px;">' + fmtDate(e.date) + (e.avgPower ? ' · ' + e.avgPower + 'w' : '') + '</div>'
+            + '</div>';
+        }).join('')
+      + '</div>'
+      + '</div>';
+  }
+  content.innerHTML = html || '<div style="color:var(--muted);text-align:center;padding:40px;">No effort data yet — hit Sync</div>';
 }
 
 function renderStravaProgress() {
@@ -1458,15 +1591,14 @@ function renderPlan() {
   const skipped  = Object.values(status).filter(s => s === 'skipped').length;
   const past     = TRAINING_PLAN.filter(w => w.date < today).length;
   const pct      = past > 0 ? Math.round(done / past * 100) : 0;
-  const weeksLeft = Math.max(0, Math.ceil((new Date('2026-07-13') - new Date()) / 604800000));
   const typeColors = { race: '#f0a060', ride: '#60c8f0', run: '#c8f060', zwift: '#a060f0', rest: '#444', strength: '#f06060' };
   const typeBg    = { race: 'rgba(240,160,96,0.08)', ride: 'rgba(96,200,240,0.06)', run: 'rgba(200,240,96,0.06)', zwift: 'rgba(160,96,240,0.06)', rest: 'rgba(255,255,255,0.02)', strength: 'rgba(240,96,96,0.06)' };
   const fmtTime = s => { if (!s) return '--'; const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h > 0 ? h + 'h ' + m + 'm' : m + 'm'; };
-  let html = '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:28px;">'
+  let html = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:28px;">'
     + '<div class="stat-card" style="--accent-color:var(--accent)"><div class="stat-label">Completed</div><div class="stat-value">' + done + '<small>/' + past + ' past days</small></div><div class="stat-sub">' + pct + '% adherence</div></div>'
     + '<div class="stat-card" style="--accent-color:var(--accent2)"><div class="stat-label">Remaining</div><div class="stat-value">' + (total - done - skipped) + '<small> workouts</small></div><div class="stat-sub">to Iceland Jul 13</div></div>'
     + '<div class="stat-card" style="--accent-color:var(--accent3)"><div class="stat-label">Skipped</div><div class="stat-value">' + skipped + '</div></div>'
-    + '<div class="stat-card" style="--accent-color:var(--accent)"><div class="stat-label">Weeks to Iceland</div><div class="stat-value">' + weeksLeft + '</div><div class="stat-sub">departing Jul 13</div></div>'
+
     + '</div>';
   for (const [wk, days] of Object.entries(weeks)) {
     html += '<div style="margin-bottom:24px;"><div style="font-family:var(--mono);font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted);padding:6px 0 10px;border-bottom:1px solid var(--border);margin-bottom:10px;">Week ' + wk + '</div>';
@@ -1491,6 +1623,159 @@ function renderPlan() {
     html += '</div>';
   }
   container.innerHTML = html;
+}
+
+
+// ── COMBO STATS ────────────────────────────────────────────────────────────
+function renderComboStats() {
+  const activities = JSON.parse(localStorage.getItem('strava_activities') || '[]');
+  const segments   = JSON.parse(localStorage.getItem('strava_segments') || '[]');
+  const WEIGHT_KG  = 54;
+
+  if (!activities.length) {
+    document.getElementById('statsNoData').style.display = 'block';
+    return;
+  }
+  document.getElementById('statsNoData').style.display = 'none';
+
+  const outdoor = activities.filter(a => !a.zwift && (a.np || a.avgPower) && a.avgHR);
+  const sorted  = [...outdoor].sort((a, b) => new Date(a.date) - new Date(b.date));
+  const fmtDate = d => new Date((d||'').includes('T') ? d : d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+  const pOpts = {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1e2028', titleColor: '#e8eaf0', bodyColor: '#6b7080', borderColor: '#2a2d35', borderWidth: 1 } },
+    scales: { x: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 }, maxTicksLimit: 12 }, grid: { color: '#2a2d35' } }, y: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } } }
+  };
+
+  // ── 1. Power distribution (histogram of NP values) ──────────────────────
+  destroyChart('statsPowerDist');
+  const npVals = sorted.map(r => r.np || r.avgPower).filter(Boolean);
+  if (npVals.length) {
+    const buckets = {};
+    npVals.forEach(v => { const b = Math.floor(v / 10) * 10; buckets[b] = (buckets[b] || 0) + 1; });
+    const bKeys = Object.keys(buckets).map(Number).sort((a,b)=>a-b);
+    const c1 = document.getElementById('statsPowerDist');
+    if (c1) charts.statsPowerDist = new Chart(c1, {
+      type: 'bar',
+      data: { labels: bKeys.map(k => k + '-' + (k+10) + 'w'), datasets: [{ data: bKeys.map(k => buckets[k]), backgroundColor: bKeys.map(k => k >= ftp * 0.9 ? 'rgba(200,240,96,0.7)' : 'rgba(200,240,96,0.3)'), borderRadius: 3 }] },
+      options: { ...pOpts, plugins: { ...pOpts.plugins, tooltip: { ...pOpts.plugins.tooltip, callbacks: { label: ctx => ctx.raw + ' rides' } } }, scales: { ...pOpts.scales, x: { ...pOpts.scales.x, title: { display: true, text: 'NP range', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }, y: { ...pOpts.scales.y, title: { display: true, text: 'rides', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } } } }
+    });
+  }
+
+  // ── 2. HR vs NP scatter — efficiency ────────────────────────────────────
+  destroyChart('statsHRvsPower');
+  const hrPwrData = sorted.filter(r => r.avgHR && (r.np || r.avgPower)).map(r => ({ x: r.np || r.avgPower, y: r.avgHR, label: fmtDate(r.date) }));
+  if (hrPwrData.length) {
+    const c2 = document.getElementById('statsHRvsPower');
+    if (c2) charts.statsHRvsPower = new Chart(c2, {
+      type: 'scatter',
+      data: { datasets: [{ data: hrPwrData, backgroundColor: 'rgba(200,240,96,0.5)', pointRadius: 5, pointHoverRadius: 7 }] },
+      options: { ...pOpts, plugins: { ...pOpts.plugins, tooltip: { ...pOpts.plugins.tooltip, callbacks: { label: ctx => hrPwrData[ctx.dataIndex].label + ': ' + ctx.parsed.x + 'w · ' + ctx.parsed.y + 'bpm' } } }, scales: { x: { ...pOpts.scales.x, title: { display: true, text: 'NP (watts)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }, y: { ...pOpts.scales.y, title: { display: true, text: 'Avg HR (bpm)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } } } }
+    });
+  }
+
+  // ── 3. Speed vs distance ────────────────────────────────────────────────
+  destroyChart('statsSpeedVsDist');
+  const spDistData = sorted.filter(r => r.avgSpeed && r.distMiles).map(r => ({ x: r.distMiles, y: parseFloat(r.avgSpeed.toFixed(1)), label: fmtDate(r.date) + ' · ' + r.name }));
+  if (spDistData.length) {
+    const c3 = document.getElementById('statsSpeedVsDist');
+    if (c3) charts.statsSpeedVsDist = new Chart(c3, {
+      type: 'scatter',
+      data: { datasets: [{ data: spDistData, backgroundColor: 'rgba(96,200,240,0.5)', pointRadius: 5, pointHoverRadius: 7 }] },
+      options: { ...pOpts, plugins: { ...pOpts.plugins, tooltip: { ...pOpts.plugins.tooltip, callbacks: { label: ctx => spDistData[ctx.dataIndex].label + ': ' + ctx.parsed.y + 'mph' } } }, scales: { x: { ...pOpts.scales.x, title: { display: true, text: 'Distance (mi)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }, y: { ...pOpts.scales.y, title: { display: true, text: 'Avg Speed (mph)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } } } }
+    });
+  }
+
+  // ── 4. Cardiac efficiency over time ─────────────────────────────────────
+  destroyChart('statsCardiac');
+  const cardiacData = sorted.filter(r => r.avgHR && (r.np || r.avgPower)).map(r => ({ x: fmtDate(r.date), y: parseFloat((r.avgHR / (r.np || r.avgPower)).toFixed(3)) }));
+  if (cardiacData.length) {
+    const c4 = document.getElementById('statsCardiac');
+    if (c4) charts.statsCardiac = new Chart(c4, {
+      type: 'line',
+      data: { labels: cardiacData.map(d => d.x), datasets: [{ data: cardiacData.map(d => d.y), borderColor: '#f0a060', backgroundColor: 'rgba(240,160,96,0.1)', fill: true, tension: 0.3, pointRadius: 4, pointBackgroundColor: '#f0a060', borderWidth: 2 }] },
+      options: { ...pOpts, plugins: { ...pOpts.plugins, tooltip: { ...pOpts.plugins.tooltip, callbacks: { label: ctx => 'bpm/watt: ' + ctx.raw } } }, scales: { ...pOpts.scales, y: { ...pOpts.scales.y, reverse: true, title: { display: true, text: 'bpm/watt (lower = fitter)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } } } }
+    });
+  }
+
+  // ── 5 & 6. PP Hill efforts — power vs time, HR vs time ─────────────────
+  const ppHill = segments.find(s => String(s.id) === '613198' || (s.name && s.name.toLowerCase().includes('prospect park hill')));
+  if (ppHill && ppHill.efforts.length) {
+    const hillSorted = [...ppHill.efforts].sort((a, b) => new Date(a.date) - new Date(b.date));
+    const hillLabels = hillSorted.map(e => fmtDate(e.date));
+
+    destroyChart('statsHillPower');
+    const c5 = document.getElementById('statsHillPower');
+    if (c5 && hillSorted.some(e => e.avgPower)) {
+      charts.statsHillPower = new Chart(c5, {
+        type: 'scatter',
+        data: { datasets: [{
+          data: hillSorted.filter(e => e.avgPower).map(e => ({ x: e.elapsed, y: e.avgPower, label: fmtDate(e.date) })),
+          backgroundColor: hillSorted.filter(e=>e.avgPower).map(e => e.elapsed === Math.min(...ppHill.efforts.map(x=>x.elapsed)) ? '#c8f060' : 'rgba(200,240,96,0.4)'),
+          pointRadius: 5, pointHoverRadius: 7
+        }] },
+        options: { ...pOpts, plugins: { ...pOpts.plugins, tooltip: { ...pOpts.plugins.tooltip, callbacks: { label: ctx => { const d = hillSorted.filter(e=>e.avgPower)[ctx.dataIndex]; return fmtDate(d.date) + ': ' + d.avgPower + 'w in ' + fmtSecs(d.elapsed); } } } }, scales: { x: { ...pOpts.scales.x, title: { display: true, text: 'Time (seconds)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }, y: { ...pOpts.scales.y, title: { display: true, text: 'Avg Power (w)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } } } }
+      });
+    }
+
+    destroyChart('statsHillHR');
+    const c6 = document.getElementById('statsHillHR');
+    if (c6 && hillSorted.some(e => e.avgHR)) {
+      charts.statsHillHR = new Chart(c6, {
+        type: 'scatter',
+        data: { datasets: [{
+          data: hillSorted.filter(e => e.avgHR).map(e => ({ x: e.elapsed, y: e.avgHR, label: fmtDate(e.date) })),
+          backgroundColor: 'rgba(240,96,96,0.5)',
+          pointRadius: 5, pointHoverRadius: 7
+        }] },
+        options: { ...pOpts, plugins: { ...pOpts.plugins, tooltip: { ...pOpts.plugins.tooltip, callbacks: { label: ctx => { const d = hillSorted.filter(e=>e.avgHR)[ctx.dataIndex]; return fmtDate(d.date) + ': ' + d.avgHR + 'bpm in ' + fmtSecs(d.elapsed); } } } }, scales: { x: { ...pOpts.scales.x, title: { display: true, text: 'Time (seconds)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }, y: { ...pOpts.scales.y, title: { display: true, text: 'Avg HR (bpm)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } } } }
+      });
+    }
+  }
+
+  // ── 7. Elevation vs NP scatter ──────────────────────────────────────────
+  destroyChart('statsElevVsNP');
+  const elevNPData = sorted.filter(r => r.elevGainFt && (r.np || r.avgPower)).map(r => ({ x: r.elevGainFt, y: r.np || r.avgPower, label: fmtDate(r.date) + ' · ' + r.distMiles + 'mi' }));
+  if (elevNPData.length) {
+    const c7 = document.getElementById('statsElevVsNP');
+    if (c7) charts.statsElevVsNP = new Chart(c7, {
+      type: 'scatter',
+      data: { datasets: [{ data: elevNPData, backgroundColor: 'rgba(160,96,240,0.5)', pointRadius: 5, pointHoverRadius: 7 }] },
+      options: { ...pOpts, plugins: { ...pOpts.plugins, tooltip: { ...pOpts.plugins.tooltip, callbacks: { label: ctx => elevNPData[ctx.dataIndex].label + ': ' + ctx.parsed.y + 'w NP' } } }, scales: { x: { ...pOpts.scales.x, title: { display: true, text: 'Elevation gain (ft)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }, y: { ...pOpts.scales.y, title: { display: true, text: 'NP (watts)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } } } }
+    });
+  }
+
+  // ── Key numbers summary ──────────────────────────────────────────────────
+  const avgNP   = outdoor.length ? Math.round(outdoor.reduce((s,r) => s + (r.np||r.avgPower||0), 0) / outdoor.length) : null;
+  const avgHRAll = outdoor.filter(r=>r.avgHR).length ? Math.round(outdoor.filter(r=>r.avgHR).reduce((s,r)=>s+r.avgHR,0)/outdoor.filter(r=>r.avgHR).length) : null;
+  const bestNP  = outdoor.length ? Math.max(...outdoor.map(r => r.np||r.avgPower||0)) : null;
+  const avgWkg  = avgNP ? parseFloat((avgNP / WEIGHT_KG).toFixed(2)) : null;
+  const bestWkg = bestNP ? parseFloat((bestNP / WEIGHT_KG).toFixed(2)) : null;
+  const totalElev = outdoor.reduce((s,r) => s + (r.elevGainFt||0), 0);
+  const totalMiles = outdoor.reduce((s,r) => s + (r.distMiles||0), 0);
+  const cardiac = avgNP && avgHRAll ? parseFloat((avgHRAll/avgNP).toFixed(3)) : null;
+
+  document.getElementById('statsKeyNumbers').innerHTML =
+    '<div class="section-title" style="margin-bottom:14px;">Key numbers — ' + outdoor.length + ' outdoor rides</div>'
+    + '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;">'
+    + [
+        ['Avg NP', avgNP ? avgNP + 'w' : '--', avgNP ? Math.round(avgNP/ftp*100) + '% FTP' : ''],
+        ['Best NP', bestNP ? bestNP + 'w' : '--', bestNP ? Math.round(bestNP/ftp*100) + '% FTP' : ''],
+        ['Avg w/kg', avgWkg || '--', 'at ' + WEIGHT_KG + 'kg / 119lbs'],
+        ['Best w/kg', bestWkg || '--', 'single ride'],
+        ['Avg HR', avgHRAll ? avgHRAll + 'bpm' : '--', ''],
+        ['Cardiac cost', cardiac ? cardiac + ' bpm/w' : '--', 'lower = fitter'],
+        ['Total miles', Math.round(totalMiles) + 'mi', outdoor.length + ' outdoor rides'],
+        ['Total elevation', Math.round(totalElev).toLocaleString() + 'ft', 'all outdoor rides'],
+      ].map(([label, value, sub]) =>
+        '<div style="background:var(--surface2);border-radius:6px;padding:12px 14px;">'
+        + '<div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:0.08em;margin-bottom:4px;">' + label + '</div>'
+        + '<div style="font-family:var(--mono);font-size:18px;color:var(--text);">' + value + '</div>'
+        + (sub ? '<div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:2px;">' + sub + '</div>' : '')
+        + '</div>'
+      ).join('')
+    + '</div>';
 }
 
 // ── INIT ───────────────────────────────────────────────────────────────────
