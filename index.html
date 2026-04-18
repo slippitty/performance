@@ -494,6 +494,12 @@
     </div>
     <div class="chart-row">
       <div class="chart-card">
+        <h4>Elevation gain per ride (ft)</h4>
+        <div class="chart-wrap"><canvas id="progressElevChart"></canvas></div>
+      </div>
+    </div>
+    <div class="chart-row">
+      <div class="chart-card">
         <h4>PP Hill — best VAM per ride (m/hr) <span style="font-size:9px;color:var(--muted);font-weight:normal;">requires FIT upload</span></h4>
         <div class="chart-wrap"><canvas id="progressVAMChart"></canvas></div>
       </div>
@@ -1402,6 +1408,7 @@ function renderProgress() {
           avgHR: a.avgHR,
           maxHR: a.maxHR,
           avgSpeed: a.avgSpeed,
+          elevGainFt: a.elevGainFt,
           tss: null,
           zones: [0,0,0,0,0,0],
         },
@@ -1456,6 +1463,22 @@ function renderProgress() {
     data: { labels, datasets: [{ data: sorted.map(r => r.metrics.distMiles), backgroundColor: 'rgba(96,200,240,0.5)', borderRadius: 4 }] },
     options: progressChartOpts
   });
+
+  // Elevation gain chart
+  const elevData = sorted.map(r => r.metrics?.elevGainFt || r.elevGainFt || null);
+  if (elevData.some(v => v)) {
+    destroyChart('progressElevChart');
+    const elevCanvas = document.getElementById('progressElevChart');
+    if (elevCanvas) {
+      charts.progressElevChart = new Chart(elevCanvas, {
+        type: 'bar',
+        data: { labels, datasets: [{ data: elevData, backgroundColor: 'rgba(240,160,96,0.5)', borderRadius: 4 }] },
+        options: { ...progressChartOpts, scales: { ...progressChartOpts.scales,
+          y: { ...progressChartOpts.scales.y, title: { display: true, text: 'ft', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }
+        }}
+      });
+    }
+  }
 
   // VAM trend — best hill pass per ride
   const vamData = sorted.map(r => {
@@ -1608,100 +1631,100 @@ function getZoneName(power, ftp) {
 
 
 const TRAINING_PLAN = [
-  // WK 1
-  {wk:1,date:'2026-04-20',day:'Mon',event:'',workout:'Zwift: Ramp Test (FTP Baseline)',type:'zwift',target:'Complete ramp test. Log FTP. Update zones.'},
-  {wk:1,date:'2026-04-21',day:'Tue',event:'',workout:'Easy Run — Z2',type:'run',target:'3mi @ 10:30–11:00/mi; conversational; HR <140'},
-  {wk:1,date:'2026-04-22',day:'Wed',event:'',workout:'Zwift: 3x5min Threshold',type:'zwift',target:'10min wu; 3x5min @95–100% FTP; 3min rest; 8min cd — 38 min'},
-  // WK 2
-  {wk:2,date:'2026-04-23',day:'Thu',event:'',workout:'Track: Fartlek 1/1',type:'run',target:'10x 1min hard Z5 / 1min easy; ~40min total'},
-  {wk:2,date:'2026-04-24',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap. Compare to prior week.'},
-  {wk:2,date:'2026-04-25',day:'Sat',event:'',workout:'PP Ride: Hill Benchmark #1 + Loops',type:'ride',target:'BENCHMARK: time 0.48mi hill. Baseline = 2:35/144bpm/168w. Then 2 easy loops.'},
-  {wk:2,date:'2026-04-26',day:'Sun',event:'Brooklyn Half 13.1mi',workout:'RACE: Brooklyn Half Marathon',type:'race',target:'Target sub 2:00. Log every mile split.'},
-  {wk:2,date:'2026-04-27',day:'Mon',event:'',workout:'REST — active recovery',type:'rest',target:'Light walking only.'},
-  {wk:2,date:'2026-04-28',day:'Tue',event:'',workout:'Easy Run Z1 shakeout',type:'run',target:'3mi very easy 11:00+/mi; flush legs'},
-  {wk:2,date:'2026-04-29',day:'Wed',event:'',workout:'PP Ride: Easy Recovery Loops',type:'ride',target:'2–3 easy loops Z1–Z2; HR <135; no hill effort'},
-  // WK 3
-  {wk:3,date:'2026-04-30',day:'Thu',event:'',workout:'Track: 800m Repeats',type:'run',target:'5x800m @4:20–4:30; 2min rest; 1mi warm/cool'},
-  {wk:3,date:'2026-05-01',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap. Compare to Apr 24.'},
-  {wk:3,date:'2026-05-02',day:'Sat',event:'Mindful 5k',workout:'RACE: Mindful 5k',type:'race',target:'Race flat out. Log time + HR.'},
-  {wk:3,date:'2026-05-03',day:'Sun',event:'5 Boro Bike 40mi',workout:'EVENT: 5 Boro Bike (Road)',type:'ride',target:'Moderate Z2–Z3; enjoy it. Log avg HR.'},
-  {wk:3,date:'2026-05-04',day:'Mon',event:'',workout:'REST',type:'rest',target:'Full rest.'},
-  {wk:3,date:'2026-05-05',day:'Tue',event:'BK 5k 6pm',workout:'RACE: BK 5k',type:'race',target:'Race effort. Compare to Mindful 5k time.'},
-  {wk:3,date:'2026-05-06',day:'Wed',event:'',workout:'PP Ride: Tempo Loops',type:'ride',target:'3 loops: 1 easy Z2 / 1 tempo Z3 push the hill / 1 easy cooldown'},
-  // WK 4
-  {wk:4,date:'2026-05-07',day:'Thu',event:'',workout:'Run: Easy + Hill Strides',type:'run',target:'4mi easy Z2 + 6x20sec hill sprints; walk back down each'},
-  {wk:4,date:'2026-05-08',day:'Fri',event:'In Asbury Park',workout:'Outdoor Ride — easy exploration',type:'ride',target:'Z1–Z2 only; enjoy; log distance + HR'},
-  {wk:4,date:'2026-05-09',day:'Sat',event:'In Asbury Park',workout:'Long Ride or Run — Asbury area',type:'ride',target:'Ride 2–3hrs Z2 OR long run 8mi+'},
-  {wk:4,date:'2026-05-10',day:'Sun',event:'In Asbury Park',workout:'Active recovery — easy walk',type:'rest',target:'Rest / tourism'},
-  {wk:4,date:'2026-05-11',day:'Mon',event:'',workout:'Zwift: Over-Unders',type:'zwift',target:'10min wu; 4x(3min @95% / 2min @105%); 5min rest; 5min cd — 40 min'},
-  {wk:4,date:'2026-05-12',day:'Tue',event:'',workout:'Track: 400m Repeats',type:'run',target:'8x400m @2:05–2:10; 90sec rest; 1mi warm/cool'},
-  {wk:4,date:'2026-05-13',day:'Wed',event:'',workout:'PP Ride: Hill Repeats',type:'ride',target:'3x full hill effort; log time/HR/speed each rep. Compare to Apr 25.'},
-  // WK 5
-  {wk:5,date:'2026-05-14',day:'Thu',event:'',workout:'Run: Progressive Tempo',type:'run',target:'4mi: 1mi easy / 2mi @8:50–9:10/mi Z3 / 1mi easy'},
-  {wk:5,date:'2026-05-15',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap. Compare trend.'},
-  {wk:5,date:'2026-05-16',day:'Sat',event:'BLKYN Half 13.1mi',workout:'RACE: BLKYN Half Marathon',type:'race',target:'Goal: match or beat Brooklyn Half time.'},
-  {wk:5,date:'2026-05-17',day:'Sun',event:"Farmers Granddaughter 43mi",workout:"RACE: Farmers Granddaughter Gravel",type:'race',target:'Target avg 14–15mph; HR <160; log climbing total'},
-  {wk:5,date:'2026-05-18',day:'Mon',event:'',workout:'Zwift: Ramp Test (Test 2)',type:'zwift',target:'4-week FTP retest. Update zones.'},
-  {wk:5,date:'2026-05-19',day:'Tue',event:'',workout:'REST',type:'rest',target:'Full recovery.'},
-  {wk:5,date:'2026-05-20',day:'Wed',event:'PPTC 5k',workout:'RACE: PPTC 5k',type:'race',target:'Race effort. Log time vs earlier 5ks.'},
-  // WK 6
-  {wk:6,date:'2026-05-21',day:'Thu',event:'',workout:"Zwift: 30/30s Power Version",type:'zwift',target:'10min wu; 12x30sec @125% FTP / 30sec @50%; 7min cd — 35 min'},
-  {wk:6,date:'2026-05-22',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap.'},
-  {wk:6,date:'2026-05-23',day:'Sat',event:'',workout:'Long Gravel: Shirley Chisholm',type:'ride',target:'3–4hrs Z2–Z3; eat every 30–40min; log total climbing'},
-  {wk:6,date:'2026-05-24',day:'Sun',event:'Mine Hill Gravel 26mi',workout:'RACE: Mine Hill Gravel',type:'race',target:'Race effort. Log avg watts + climbing ft.'},
-  {wk:6,date:'2026-05-25',day:'Mon',event:'',workout:'REST',type:'rest',target:'Memorial Day — full rest'},
-  {wk:6,date:'2026-05-26',day:'Tue',event:'',workout:'Run: Easy + Drills',type:'run',target:'4mi easy Z2 + 5min drills (high knees, butt kicks, A-skips)'},
-  {wk:6,date:'2026-05-27',day:'Wed',event:'',workout:'PP Ride: HILL BENCHMARK #2 + Tempo',type:'ride',target:'BENCHMARK: target sub 2:20 / >12mph / <142bpm / >178w. Then 2 tempo loops.'},
-  // WK 7
-  {wk:7,date:'2026-05-28',day:'Thu',event:'',workout:'Track: HM Pace Run',type:'run',target:'5mi: 1mi wu / 3mi @9:09/mi Z3–Z4 / 1mi cd'},
-  {wk:7,date:'2026-05-29',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap.'},
-  {wk:7,date:'2026-05-30',day:'Sat',event:'',workout:'Long Gravel: Flushing Meadows / Cunningham',type:'ride',target:'4+hrs Z2; practice eating every 30–40min; log avg HR'},
-  {wk:7,date:'2026-05-31',day:'Sun',event:'',workout:'Long Run: Negative Split',type:'run',target:'10mi: first 5mi @11:00/mi, second 5mi @10:00–10:20/mi'},
-  {wk:7,date:'2026-06-01',day:'Mon',event:'',workout:'REST',type:'rest',target:'Full rest — big volume weekend'},
-  {wk:7,date:'2026-06-02',day:'Tue',event:'',workout:'PP Ride: Easy Recovery + Single Hill',type:'ride',target:'2 easy loops; 1 controlled hill effort; log watts.'},
-  {wk:7,date:'2026-06-03',day:'Wed',event:'PPTC 5k',workout:'RACE: PPTC 5k',type:'race',target:'Race effort. Compare to May 20 time.'},
-  // WK 8
-  {wk:8,date:'2026-06-04',day:'Thu',event:'',workout:'Zwift: VO2 4-min Blocks',type:'zwift',target:'8min wu; 5x4min @110–115% FTP; 4min rest; 6min cd — 38 min'},
-  {wk:8,date:'2026-06-05',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Log avg watts, HR, best lap, avg lap.'},
-  {wk:8,date:'2026-06-06',day:'Sat',event:'Mini 10k',workout:'RACE: Mini 10k',type:'race',target:'Race effort. Target sub-55:00 (~8:52/mi).'},
-  {wk:8,date:'2026-06-07',day:'Sun',event:'',workout:'PP Ride: Back-to-Back Day 1',type:'ride',target:'90min easy Z2 HR <140; tired legs after 10k — the point'},
-  {wk:8,date:'2026-06-08',day:'Mon',event:'',workout:'PP Ride: Back-to-Back Day 2',type:'ride',target:'90min Z2 — intentionally tired; simulates Iceland Day 2.'},
-  {wk:8,date:'2026-06-09',day:'Tue',event:'',workout:'Easy Run Z1',type:'run',target:'Very easy 3mi; 11:00+/mi; recovery'},
-  {wk:8,date:'2026-06-10',day:'Wed',event:'',workout:'Zwift: Tempo Blocks — Short',type:'zwift',target:'8min wu; 3x8min @85–90% FTP; 3min rest; 6min cd — 35 min'},
-  // WK 9
-  {wk:9,date:'2026-06-11',day:'Thu',event:'',workout:'Track: 200m Speed Repeats',type:'run',target:'12x200m @~57–60sec; 60sec rest; 1mi warm/cool'},
-  {wk:9,date:'2026-06-12',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops + Intervals',type:'ride',target:'BENCHMARK #3: target sub 2:10 / >13mph / <140bpm / >188w. Then 3x hill intervals.'},
-  {wk:9,date:'2026-06-13',day:'Sat',event:'',workout:'REST — pre-race',type:'rest',target:'Light walk only. Big race tomorrow.'},
-  {wk:9,date:'2026-06-14',day:'Sun',event:'French Creek Iron Tour 60mi',workout:'RACE: French Creek Iron Tour — Gravel',type:'race',target:'Race effort 60mi. Log avg watts, HR, climbing, nutrition.'},
-  {wk:9,date:'2026-06-15',day:'Mon',event:'',workout:'Zwift: Ramp Test (Test 3)',type:'zwift',target:'Final FTP check before taper. Update zones.'},
-  {wk:9,date:'2026-06-16',day:'Tue',event:'',workout:'REST',type:'rest',target:'Recovery after 60mi race + FTP test'},
-  {wk:9,date:'2026-06-17',day:'Wed',event:'PPTC 5k',workout:'RACE: PPTC 5k',type:'race',target:'Low-pressure race. Log pace vs Jun 3.'},
-  // WK 10
-  {wk:10,date:'2026-06-18',day:'Thu',event:'',workout:'Zwift: VO2 8-min Blocks',type:'zwift',target:'8min wu; 3x8min @108–112% FTP; 4min rest; 8min cd — 40 min'},
-  {wk:10,date:'2026-06-19',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops',type:'ride',target:'6 laps PP. Time the hill each lap. Note how taper legs feel vs prior weeks.'},
-  {wk:10,date:'2026-06-20',day:'Sat',event:'Queens 10k',workout:'RACE: Queens 10k',type:'race',target:'Race effort. Target sub-54:00 (~8:42/mi).'},
-  {wk:10,date:'2026-06-21',day:'Sun',event:'West Chester Roubaix 61mi',workout:'RACE: West Chester Roubaix — Gravel',type:'race',target:'Race effort 61mi. Even watts on climbs.'},
-  {wk:10,date:'2026-06-22',day:'Mon',event:'',workout:'REST',type:'rest',target:'Full rest — huge race double'},
-  {wk:10,date:'2026-06-23',day:'Tue',event:'',workout:'Run: Easy + Drills',type:'run',target:'3mi easy + drills; neuromuscular maintenance'},
-  {wk:10,date:'2026-06-24',day:'Wed',event:'',workout:'PP Ride: Easy Recovery + Single Hill',type:'ride',target:'2 easy loops; 1 controlled hill effort; log watts.'},
-  // WK 11
-  {wk:11,date:'2026-06-25',day:'Thu',event:'',workout:'Zwift: Taper Openers',type:'zwift',target:'10min wu; 3x2min @105% / 3min easy; 10min cd — 35 min'},
-  {wk:11,date:'2026-06-26',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops (taper)',type:'ride',target:'4 laps only — taper. Time the hill. Should feel fast with fresh legs.'},
-  {wk:11,date:'2026-06-27',day:'Sat',event:'LGBT 4mi Run',workout:'RACE: LGBT 4-Mile Run',type:'race',target:'Fun race. Log pace.'},
-  {wk:11,date:'2026-06-28',day:'Sun',event:'Empire Gravel 70mi',workout:'RACE: Empire Gravel 70mi',type:'race',target:'BIGGEST pre-Iceland race. Smart pacing.'},
-  {wk:11,date:'2026-06-29',day:'Mon',event:'',workout:'REST — taper begins',type:'rest',target:'Full rest.'},
-  {wk:11,date:'2026-06-30',day:'Tue',event:'',workout:'Run: Barefoot Grass Jog',type:'run',target:'20min very easy on grass; proprioception + recovery'},
-  {wk:11,date:'2026-07-01',day:'Wed',event:'PPTC 5k',workout:'RACE: PPTC 5k (taper — easy)',type:'race',target:'Treat as a fun run. Z2–Z3 only.'},
-  // WK 12
-  {wk:12,date:'2026-07-02',day:'Thu',event:'',workout:'Zwift: Short Activation',type:'zwift',target:'10min wu; 4x1min @105% / 2min easy; 10min cd — 30 min'},
-  {wk:12,date:'2026-07-03',day:'Fri',event:'',workout:'PP Benchmark: Prospect Park Loops (final)',type:'ride',target:'4 laps easy. 1 benchmark hill effort. Feel sharp. Iceland in 10 days.'},
-  {wk:12,date:'2026-07-04',day:'Sat',event:'',workout:'REST / pack gear',type:'rest',target:'4th of July — rest, prep, pack for Iceland'},
-  {wk:12,date:'2026-07-05',day:'Sun',event:'',workout:'PP Ride: FINAL HILL BENCHMARK #4',type:'ride',target:'BENCHMARK: target sub 2:00 / >13.8mph / <138bpm / >198w.'},
-  {wk:12,date:'2026-07-06',day:'Mon',event:'',workout:'REST / easy walk',type:'rest',target:'Legs up. Eat well. Sleep early.'},
-  {wk:12,date:'2026-07-07',day:'Tue',event:'',workout:'Easy Run — Z1 shakeout',type:'run',target:'20min very easy; 11:30+/mi'},
-  {wk:12,date:'2026-07-08',day:'Wed',event:'',workout:'Zwift: Short Activation',type:'zwift',target:'8min wu; 3x1min @105% / 2min easy; 6min cd — 25 min'},
-  {wk:12,date:'2026-07-09',day:'Thu',event:'',workout:'REST',type:'rest',target:'Full rest. Pack. Prep nutrition for Iceland.'},
-  {wk:12,date:'2026-07-10',day:'Fri',event:'',workout:'REST',type:'rest',target:'Full rest. Iceland in 3 days.'},
+  // ── WEEK 1 ──
+  {wk:1,date:'2026-04-20',day:'Mon',event:'',workout:'Zwift: Ramp Test (FTP Baseline)',type:'zwift',target:'10mi easy route. Log FTP result — update the FTP field top right.'},
+  {wk:1,date:'2026-04-21',day:'Tue',event:'',workout:'Easy Run — Z2 + Strength',type:'run',target:'4mi @ 10:30–11:00/mi; Bridge Piers (3.1mi) + extra. HR <140. Strength 30 min after.'},
+  {wk:1,date:'2026-04-22',day:'Wed',event:'',workout:'PP Ride: Easy Recovery Loops',type:'ride',target:'17mi — 2–3 easy loops Z1–Z2; HR <135; no hill effort; just spin.'},
+  {wk:1,date:'2026-04-23',day:'Thu',event:'',workout:'Track: Fartlek 1/1 + Strength',type:'run',target:'5mi total — 10x 1min hard Z5 / 1min easy; ~40min total w/ wu/cd. Strength 30 min after.'},
+  {wk:1,date:'2026-04-24',day:'Fri',event:'',workout:'📍 PP Benchmark #1 + Loops',type:'ride',target:'20mi — BENCHMARK: time 0.48mi hill. Baseline = 2:35/144bpm/11.2mph/168w. Then easy loops.'},
+  {wk:1,date:'2026-04-25',day:'Sat',event:'',workout:'REST',type:'rest',target:'Rest day.'},
+  {wk:1,date:'2026-04-26',day:'Sun',event:'Brooklyn Half 13.1mi',workout:'RACE: Brooklyn Half Marathon',type:'race',target:'13.1mi — Target sub 2:00. Log every mile split.'},
+  // ── WEEK 2 ──
+  {wk:2,date:'2026-04-27',day:'Mon',event:'',workout:'Zwift + Strength',type:'zwift',target:'10mi easy route. Strength 30 min after.'},
+  {wk:2,date:'2026-04-28',day:'Tue',event:'',workout:'Easy Run Z1 shakeout + Strength',type:'run',target:'4mi very easy 11:00+/mi; Bridge Piers. Flush legs after half. Strength 30 min after.'},
+  {wk:2,date:'2026-04-29',day:'Wed',event:'',workout:'PP Ride: Easy Recovery Loops',type:'ride',target:'17mi — 2–3 easy loops Z1–Z2; HR <135; no hill effort.'},
+  {wk:2,date:'2026-04-30',day:'Thu',event:'',workout:'Track: 800m Repeats + Strength',type:'run',target:'4mi total — 5x800m @4:20–4:30; 2min rest; 1mi warm/cool. Strength 30 min after.'},
+  {wk:2,date:'2026-05-01',day:'Fri',event:'',workout:'📍 PP Benchmark #2 + Loops',type:'ride',target:'20mi — BENCHMARK: time the hill. Note time/HR/speed vs #1. Then easy loops.'},
+  {wk:2,date:'2026-05-02',day:'Sat',event:'Mindful 5k',workout:'RACE: Mindful 5k',type:'race',target:'3.1mi — Race flat out. Log time + HR.'},
+  {wk:2,date:'2026-05-03',day:'Sun',event:'5 Boro Bike 40mi',workout:'EVENT: 5 Boro Bike (Road)',type:'ride',target:'40mi / 1,508ft — Moderate Z2–Z3; enjoy it. Log avg HR.'},
+  // ── WEEK 3 ──
+  {wk:3,date:'2026-05-04',day:'Mon',event:'',workout:'Zwift + Strength',type:'zwift',target:'10mi easy route. Strength 30 min after.'},
+  {wk:3,date:'2026-05-05',day:'Tue',event:'BK 5k 6pm',workout:'RACE: BK 5k',type:'race',target:'3.1mi — Race effort. Compare to Mindful 5k time.'},
+  {wk:3,date:'2026-05-06',day:'Wed',event:'',workout:'PP Ride: Tempo Loops',type:'ride',target:'17mi — 3 loops: 1 easy Z2 / 1 tempo Z3 push the hill / 1 easy cooldown.'},
+  {wk:3,date:'2026-05-07',day:'Thu',event:'',workout:'Run: Easy + Hill Strides + Strength',type:'run',target:'4mi easy Z2 + 6x20sec hill sprints; walk back down each. Strength 30 min after.'},
+  {wk:3,date:'2026-05-08',day:'Fri',event:'Asbury Park',workout:'Asbury Gravel: Sandy Hook',type:'ride',target:'48.8mi / 1,181ft — Z2 sustained; eat every 30–40min.'},
+  {wk:3,date:'2026-05-09',day:'Sat',event:'Asbury Park',workout:'Long Ride — Asbury area',type:'ride',target:'42.5mi / 612ft — Z2; enjoy; log avg HR.'},
+  {wk:3,date:'2026-05-10',day:'Sun',event:'',workout:'Active Recovery Run',type:'run',target:'10mi easy Z1–Z2; flush legs after big ride weekend.'},
+  // ── WEEK 4 ──
+  {wk:4,date:'2026-05-11',day:'Mon',event:'',workout:'Zwift: Over-Unders + Strength',type:'zwift',target:'10mi — Over-Unders session. Strength 30 min after.'},
+  {wk:4,date:'2026-05-12',day:'Tue',event:'',workout:'Track: 400m Repeats + Strength',type:'run',target:'4mi total — 8x400m @2:05–2:10; 90sec rest; 1mi warm/cool. Strength 30 min after.'},
+  {wk:4,date:'2026-05-13',day:'Wed',event:'',workout:'PP Ride: Easy Recovery Loops',type:'ride',target:'17mi — 2–3 easy loops Z1–Z2; HR <135; no hill effort.'},
+  {wk:4,date:'2026-05-14',day:'Thu',event:'',workout:'Run: Progressive Tempo + Strength',type:'run',target:'4mi: 1mi easy / 2mi @8:50–9:10/mi Z3 / 1mi easy. Strength 30 min after.'},
+  {wk:4,date:'2026-05-15',day:'Fri',event:'',workout:'📍 PP Benchmark #3 + Loops',type:'ride',target:'20mi — BENCHMARK: target sub 2:25 / >12mph / <143bpm. Note vs #1 and #2.'},
+  {wk:4,date:'2026-05-16',day:'Sat',event:'BLKYN Half 13.1mi',workout:'RACE: BLKYN Half Marathon',type:'race',target:'13.1mi — Goal: match or beat Brooklyn Half time.'},
+  {wk:4,date:'2026-05-17',day:'Sun',event:"Farmers Granddaughter 42.88mi",workout:"RACE: Farmers Granddaughter Gravel",type:'race',target:"42.88mi / 4,340ft — Target avg 14–15mph; HR <160; log climbing total."},
+  // ── WEEK 5 ──
+  {wk:5,date:'2026-05-18',day:'Mon',event:'',workout:'REST + Strength',type:'rest',target:'Full recovery. Strength if feeling good.'},
+  {wk:5,date:'2026-05-19',day:'Tue',event:'',workout:'Zwift: Ramp Test (Test 2) + Strength',type:'zwift',target:'10mi — 4-week FTP retest. Update FTP field. Strength 30 min after.'},
+  {wk:5,date:'2026-05-20',day:'Wed',event:'PPTC 5k',workout:'RACE: PPTC 5k',type:'race',target:'3.1mi — Race effort. Log time vs earlier 5ks.'},
+  {wk:5,date:'2026-05-21',day:'Thu',event:'',workout:'Track: 1-Mile Repeats + Strength',type:'run',target:'5mi total — 3x1mi @8:20–8:35; 3min rest; 1mi warm/cool. Strength 30 min after.'},
+  {wk:5,date:'2026-05-22',day:'Fri',event:'',workout:'📍 PP Benchmark #4 + Loops',type:'ride',target:'25mi — BENCHMARK: target sub 2:20 / >12mph / <142bpm / >178w. Compare trend.'},
+  {wk:5,date:'2026-05-23',day:'Sat',event:'',workout:'Long Run',type:'run',target:'10mi easy Z2; note how legs feel after benchmark Friday.'},
+  {wk:5,date:'2026-05-24',day:'Sun',event:'Mine Hill 26mi',workout:'RACE: Mine Hill Gravel',type:'race',target:'26mi / 2,500ft — Race effort. Log avg watts + climbing ft.'},
+  // ── WEEK 6 ──
+  {wk:6,date:'2026-05-25',day:'Mon',event:'',workout:'Long Gravel: Shirley Chisholm',type:'ride',target:'40mi — Z2–Z3 sustained; eat every 30–40min; log total climbing.'},
+  {wk:6,date:'2026-05-26',day:'Tue',event:'',workout:'Run: Easy + Drills + Strength',type:'run',target:'4mi easy Z2 + 5min drills (high knees, butt kicks, A-skips). Bridge Piers. Strength 30 min after.'},
+  {wk:6,date:'2026-05-27',day:'Wed',event:'',workout:'PP Ride: Easy Recovery Loops',type:'ride',target:'17mi — 2–3 easy loops Z1–Z2; HR <135; no hill effort.'},
+  {wk:6,date:'2026-05-28',day:'Thu',event:'',workout:'Track: HM Pace Run + Strength',type:'run',target:'5mi: 1mi wu / 3mi @9:09/mi Z3–Z4 / 1mi cd. Strength 30 min after.'},
+  {wk:6,date:'2026-05-29',day:'Fri',event:'',workout:'📍 PP Benchmark #5 + Loops',type:'ride',target:'20mi — BENCHMARK: target sub 2:20 / >12mph / <142bpm / >178w. Then 2 tempo loops Z3.'},
+  {wk:6,date:'2026-05-30',day:'Sat',event:'',workout:'Long Gravel: Housatonic Hills and Hollows',type:'ride',target:'33mi / 3,327ft — Z2 sustained; practice eating on climbs.'},
+  {wk:6,date:'2026-05-31',day:'Sun',event:'',workout:'Long Run: Negative Split + Strength',type:'run',target:'10mi: first 5mi @11:00/mi; second 5mi @10:00–10:20/mi. Strength 30 min after.'},
+  // ── WEEK 7 ──
+  {wk:7,date:'2026-06-01',day:'Mon',event:'',workout:'Zwift + Strength',type:'zwift',target:'10mi easy route. Strength 30 min after.'},
+  {wk:7,date:'2026-06-02',day:'Tue',event:'',workout:'PP Ride: Easy Recovery + Single Hill',type:'ride',target:'20mi — 2 easy loops; 1 controlled hill effort; log watts. Active recovery.'},
+  {wk:7,date:'2026-06-03',day:'Wed',event:'PPTC 5k',workout:'RACE: PPTC 5k',type:'race',target:'3.1mi — Race effort. Compare to May 20 time.'},
+  {wk:7,date:'2026-06-04',day:'Thu',event:'',workout:'Track: 800m Repeats — build + Strength',type:'run',target:'5mi total — 6x800m @4:10–4:20; 2min rest; push vs April. Strength 30 min after.'},
+  {wk:7,date:'2026-06-05',day:'Fri',event:'',workout:'📍 PP Benchmark #6 + Loops',type:'ride',target:'25mi — BENCHMARK: target sub 2:15 / >12.5mph / <141bpm. Note trend.'},
+  {wk:7,date:'2026-06-06',day:'Sat',event:'Mini 10k',workout:'RACE: Mini 10k',type:'race',target:'6.2mi — Race effort. Target sub-55:00 (~8:52/mi).'},
+  {wk:7,date:'2026-06-07',day:'Sun',event:'Kent Gravel',workout:'Kent Gravel Ride',type:'race',target:'43mi / 3,274ft — Race effort. Log avg watts, HR, climbing.'},
+  // ── WEEK 8 ──
+  {wk:8,date:'2026-06-08',day:'Mon',event:'',workout:'PP Ride: Back-to-Back Recovery',type:'ride',target:'17mi — Easy Z2 recovery loops; intentionally tired from race weekend.'},
+  {wk:8,date:'2026-06-09',day:'Tue',event:'',workout:'Easy Run Z1 + Strength',type:'run',target:'5mi very easy; Bridge Piers. Recovery. Strength 30 min after.'},
+  {wk:8,date:'2026-06-10',day:'Wed',event:'',workout:'PP Ride: Easy Recovery + Hill Check',type:'ride',target:'17mi — Easy loops + 1 hill effort. Not a full benchmark — just check form.'},
+  {wk:8,date:'2026-06-11',day:'Thu',event:'',workout:'Track: 200m Speed Repeats + Strength',type:'run',target:'6mi total — 12x200m @~57–60sec; 60sec rest; 1mi warm/cool. Strength 30 min after.'},
+  {wk:8,date:'2026-06-12',day:'Fri',event:'',workout:'📍 PP Benchmark #7 + Intervals',type:'ride',target:'20mi — BENCHMARK: target sub 2:10 / >13mph / <140bpm / >188w. Then 3x hill intervals.'},
+  {wk:8,date:'2026-06-13',day:'Sat',event:'',workout:'REST — pre-race',type:'rest',target:'3mi easy walk/jog only. Big race tomorrow.'},
+  {wk:8,date:'2026-06-14',day:'Sun',event:'French Creek Iron Tour 60mi',workout:'RACE: French Creek Iron Tour — Gravel',type:'race',target:'60mi / 6,500ft — Race effort. Log avg watts, HR, climbing, nutrition.'},
+  // ── WEEK 9 ──
+  {wk:9,date:'2026-06-15',day:'Mon',event:'',workout:'REST + Strength',type:'rest',target:'Recovery after 60mi race. Strength if feeling OK.'},
+  {wk:9,date:'2026-06-16',day:'Tue',event:'',workout:'Zwift: Ramp Test (Test 3) + Strength',type:'zwift',target:'10mi — Final FTP check before taper. Update FTP field. Strength 30 min after.'},
+  {wk:9,date:'2026-06-17',day:'Wed',event:'PPTC 5k',workout:'RACE: PPTC 5k',type:'race',target:'3.1mi — Low-pressure race. Log pace vs Jun 3.'},
+  {wk:9,date:'2026-06-18',day:'Thu',event:'',workout:'REST + Strength',type:'rest',target:'Rest. Strength 30 min after.'},
+  {wk:9,date:'2026-06-19',day:'Fri',event:'',workout:'📍 PP Benchmark #8 + Intervals',type:'ride',target:'25mi — BENCHMARK: target sub 2:10 / >13mph / <140bpm / >188w. Then intervals.'},
+  {wk:9,date:'2026-06-20',day:'Sat',event:'Queens 10k',workout:'RACE: Queens 10k',type:'race',target:'6.2mi — Race effort. Target sub-54:00 (~8:42/mi).'},
+  {wk:9,date:'2026-06-21',day:'Sun',event:'West Chester Roubaix 61mi',workout:'RACE: West Chester Roubaix — Gravel',type:'race',target:'61mi / 5,500ft — Race effort. Even watts on climbs. Log HR + climbing.'},
+  // ── WEEK 10 ──
+  {wk:10,date:'2026-06-22',day:'Mon',event:'',workout:'Zwift + Strength',type:'zwift',target:'10mi easy route. Strength 30 min after.'},
+  {wk:10,date:'2026-06-23',day:'Tue',event:'',workout:'Easy Run + Drills + Strength',type:'run',target:'5mi easy + drills; neuromuscular maintenance; HR <135. Strength 30 min after.'},
+  {wk:10,date:'2026-06-24',day:'Wed',event:'',workout:'PP Ride: Easy Recovery + Single Hill',type:'ride',target:'20mi — 2 easy loops; 1 controlled hill effort; log watts vs all prior benchmarks.'},
+  {wk:10,date:'2026-06-25',day:'Thu',event:'',workout:'Track: Taper Strides + Strength',type:'run',target:'7mi total — 1mi wu; 8x150m relaxed fast; 90sec walk rest. Feel fresh. Strength 30 min after.'},
+  {wk:10,date:'2026-06-26',day:'Fri',event:'',workout:'📍 PP Benchmark #9 + Intervals',type:'ride',target:'25mi — BENCHMARK: target sub 2:05 / >13.5mph / <139bpm. Compare full series.'},
+  {wk:10,date:'2026-06-27',day:'Sat',event:'LGBT 4mi Run',workout:'RACE: LGBT 4-Mile Run',type:'race',target:'6mi (4mi race + warmup) — Fun race. Log pace.'},
+  {wk:10,date:'2026-06-28',day:'Sun',event:'Empire Gravel 68.85mi',workout:'RACE: Empire Gravel',type:'race',target:'68.85mi / 8,300ft — BIGGEST pre-Iceland race. Smart pacing. Log watts, HR, nutrition.'},
+  // ── WEEK 11 ──
+  {wk:11,date:'2026-06-29',day:'Mon',event:'',workout:'Zwift + Strength — taper begins',type:'zwift',target:'10mi easy route. Legs up after Empire Gravel. Strength 30 min after.'},
+  {wk:11,date:'2026-06-30',day:'Tue',event:'',workout:'PP Ride: Easy Recovery + Single Hill',type:'ride',target:'17mi — 1 easy loop; 1 controlled hill effort. Active recovery only.'},
+  {wk:11,date:'2026-07-01',day:'Wed',event:'PPTC 5k',workout:'RACE: PPTC 5k (taper — easy)',type:'race',target:'3.1mi — Treat as a fun run. Z2–Z3 only.'},
+  {wk:11,date:'2026-07-02',day:'Thu',event:'',workout:'REST',type:'rest',target:'Full rest.'},
+  {wk:11,date:'2026-07-03',day:'Fri',event:'',workout:'📍 PP Final Benchmark #10 + Loops',type:'ride',target:'20mi — BENCHMARK: target sub 2:00 / >13.8mph / <138bpm / >198w. Final check before Iceland.'},
+  {wk:11,date:'2026-07-04',day:'Sat',event:'',workout:'Long Run',type:'run',target:'10mi easy Z2; 4th of July — enjoy. Legs should feel good from taper.'},
+  {wk:11,date:'2026-07-05',day:'Sun',event:'Quaker Hill Gravel 30mi',workout:'Quaker Hill Gravel',type:'ride',target:'30mi / 3,300ft — Easy effort Z2; taper ride. Log how climbing feels vs prior weeks.'},
+  // ── WEEK 12 ──
+  {wk:12,date:'2026-07-06',day:'Mon',event:'',workout:'Zwift + Strength',type:'zwift',target:'10mi easy route. Keep legs moving. Strength 30 min after.'},
+  {wk:12,date:'2026-07-07',day:'Tue',event:'',workout:'Easy Run — Z1 shakeout + Strength',type:'run',target:'4mi very easy 11:30+/mi; just move the legs gently. Strength 30 min after.'},
+  {wk:12,date:'2026-07-08',day:'Wed',event:'',workout:'PP Ride: Easy Recovery + Single Hill',type:'ride',target:'17mi — 1 easy loop; 1 controlled hill effort. Feel sharp not tired.'},
+  {wk:12,date:'2026-07-09',day:'Thu',event:'',workout:'Easy Run — Z1 shakeout + Strength',type:'run',target:'4mi very easy; shake out legs. Strength 30 min after.'},
+  {wk:12,date:'2026-07-10',day:'Fri',event:'',workout:'REST',type:'rest',target:'Full rest. Pack. Prep nutrition for Iceland.'},
   {wk:12,date:'2026-07-11',day:'Sat',event:'',workout:'REST',type:'rest',target:'Full rest.'},
   {wk:12,date:'2026-07-12',day:'Sun',event:'',workout:'REST',type:'rest',target:'Full rest. Iceland tomorrow.'},
 ];
@@ -2030,44 +2053,12 @@ function renderStravaContent() {
   }
 
   // Recent rides list
-  // Runs section
-  const stravaRuns = JSON.parse(localStorage.getItem('strava_runs') || '[]');
-  let runsHTML = '';
-  if (stravaRuns.length) {
-    const fmtPace = mpm => { const m=Math.floor(mpm), s=Math.round((mpm-m)*60); return m+':'+String(s).padStart(2,'0')+'/mi'; };
-    runsHTML = '<div class="section-title" style="margin-bottom:12px;margin-top:24px;">Recent runs from Strava</div>'
-      + '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:28px;">';
-    for (const a of stravaRuns.slice(0, 10)) {
-      const fmtDur = s => { const h=Math.floor(s/3600),m=Math.floor((s%3600)/60); return h>0?h+'h '+m+'m':m+'m'; };
-      runsHTML += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 16px;display:grid;grid-template-columns:130px 1fr repeat(4,80px);align-items:center;gap:10px;">'
-        + '<div style="font-family:var(--mono);font-size:10px;color:var(--muted);">' + new Date(a.date).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}) + '</div>'
-        + '<div style="font-size:13px;">' + a.name + (a.zwift ? ' <span style="font-family:var(--mono);font-size:9px;background:rgba(96,200,240,0.15);color:var(--accent2);padding:1px 6px;border-radius:3px;">ZWIFT</span>' : '') + '</div>'
-        + '<div style="font-family:var(--mono);font-size:12px;text-align:right;">' + a.distMiles + '<span style="display:block;font-size:10px;color:var(--muted);">mi</span></div>'
-        + '<div style="font-family:var(--mono);font-size:12px;text-align:right;">' + fmtDur(a.durationSec) + '<span style="display:block;font-size:10px;color:var(--muted);">time</span></div>'
-        + '<div style="font-family:var(--mono);font-size:12px;text-align:right;">' + (a.avgPace ? fmtPace(a.avgPace) : '--') + '<span style="display:block;font-size:10px;color:var(--muted);">pace</span></div>'
-        + '<div style="font-family:var(--mono);font-size:12px;text-align:right;">' + (a.avgHR||'--') + '<span style="display:block;font-size:10px;color:var(--muted);">bpm</span></div>'
-        + '</div>';
-    }
-    runsHTML += '</div>';
+  let runsHTML = ''; // runs moved to Progress tab
   }
 
-  let ridesHTML = '<div class="section-title" style="margin-bottom:12px;">Recent rides from Strava</div>'
-    + '<div style="display:flex;flex-direction:column;gap:8px;">';
-  for (const a of activities.slice(0, 15)) {
-    const fmtDur = s => { const h=Math.floor(s/3600),m=Math.floor((s%3600)/60); return h>0?h+'h '+m+'m':m+'m'; };
-    ridesHTML += '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 16px;display:grid;grid-template-columns:130px 1fr repeat(5,80px);align-items:center;gap:10px;">'
-      + '<div style="font-family:var(--mono);font-size:10px;color:var(--muted);">' + new Date(a.date).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'}) + '</div>'
-      + '<div style="font-size:13px;">' + a.name + (a.zwift ? ' <span style="font-family:var(--mono);font-size:9px;background:rgba(96,200,240,0.15);color:var(--accent2);padding:1px 6px;border-radius:3px;">ZWIFT</span>' : '') + '</div>'
-      + '<div style="font-family:var(--mono);font-size:12px;text-align:right;">' + a.distMiles + '<span style="display:block;font-size:10px;color:var(--muted);">mi</span></div>'
-      + '<div style="font-family:var(--mono);font-size:12px;text-align:right;">' + fmtDur(a.durationSec) + '<span style="display:block;font-size:10px;color:var(--muted);">time</span></div>'
-      + '<div style="font-family:var(--mono);font-size:12px;text-align:right;">' + (a.np||a.avgPower||'--') + '<span style="display:block;font-size:10px;color:var(--muted);">NP</span></div>'
-      + '<div style="font-family:var(--mono);font-size:12px;text-align:right;">' + (a.avgHR||'--') + '<span style="display:block;font-size:10px;color:var(--muted);">bpm</span></div>'
-      + '<div style="font-family:var(--mono);font-size:12px;text-align:right;">' + (a.elevGainFt||'--') + '<span style="display:block;font-size:10px;color:var(--muted);">ft gain</span></div>'
-      + '</div>';
-  }
-  ridesHTML += '</div>';
+  let ridesHTML = // rides list removed — see Progress tab
 
-  content.innerHTML = segsHTML + ridesHTML + runsHTML;
+  content.innerHTML = segsHTML;
 }
 
 function renderStravaProgress() {
@@ -2201,13 +2192,13 @@ function renderStravaProgressInProgress() {
   const c2 = document.getElementById('progressNPStrava');
   if (c2 && (outdoorRides.length || zwiftRides.length)) {
     // Use all dates as x-axis labels
-    const allDates = sorted.filter(a=>a.np||a.avgPower).map(a=>new Date(a.date).toLocaleDateString('en-US',{month:'short',day:'numeric'}));
+    const allDates = sorted.filter(a=>a.np||a.avgPower).map(a=>new Date(a.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}));
     const uniqueDates = [...new Set(allDates)];
     // Map each date to outdoor/zwift NP (null if no ride that day)
     const dateToOutdoor = {};
     const dateToZwift   = {};
-    outdoorRides.forEach(a => { const d=new Date(a.date).toLocaleDateString('en-US',{month:'short',day:'numeric'}); dateToOutdoor[d]=a.np||a.avgPower; });
-    zwiftRides.forEach(a   => { const d=new Date(a.date).toLocaleDateString('en-US',{month:'short',day:'numeric'}); dateToZwift[d]=a.np||a.avgPower; });
+    outdoorRides.forEach(a => { const d=new Date(a.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}); dateToOutdoor[d]=a.np||a.avgPower; });
+    zwiftRides.forEach(a   => { const d=new Date(a.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}); dateToZwift[d]=a.np||a.avgPower; });
 
     charts.progressNPStrava = new Chart(c2, {
       type:'line',
