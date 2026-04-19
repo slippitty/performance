@@ -584,41 +584,48 @@
   <div id="statsContent">
     <div class="chart-row">
       <div class="chart-card">
-        <h4>Power distribution — all outdoor rides</h4>
+        <h4>Cardiac efficiency over time — bpm / watt (lower = fitter)</h4>
         <div class="chart-wrap"><canvas id="statsPowerDist"></canvas></div>
       </div>
       <div class="chart-card">
-        <h4>HR vs Normalized Power — efficiency over time</h4>
+        <h4>PP Hill time — every effort (lower = faster)</h4>
         <div class="chart-wrap"><canvas id="statsHRvsPower"></canvas></div>
       </div>
     </div>
 
     <div class="chart-row">
       <div class="chart-card">
-        <h4>Avg speed by ride distance — aerobic base</h4>
+        <h4>w/kg over time — power to weight per ride</h4>
         <div class="chart-wrap"><canvas id="statsSpeedVsDist"></canvas></div>
       </div>
       <div class="chart-card">
-        <h4>Cardiac efficiency — HR per watt (lower = fitter)</h4>
+        <h4>HR drift — HR:NP ratio over time (lower = less fatigue)</h4>
         <div class="chart-wrap"><canvas id="statsCardiac"></canvas></div>
       </div>
     </div>
 
     <div class="chart-row">
       <div class="chart-card">
-        <h4>PP Hill — power vs time (each effort)</h4>
+        <h4>Speed efficiency — mph per watt over time</h4>
         <div class="chart-wrap"><canvas id="statsHillPower"></canvas></div>
       </div>
       <div class="chart-card">
-        <h4>PP Hill — HR vs time (each effort)</h4>
+        <h4>Climbing rate — elevation ft per mile over time</h4>
         <div class="chart-wrap"><canvas id="statsHillHR"></canvas></div>
       </div>
     </div>
 
     <div class="chart-row single">
       <div class="chart-card">
-        <h4>Elevation gain vs NP — climbing load per ride</h4>
-        <div class="chart-wrap tall"><canvas id="statsElevVsNP"></canvas></div>
+        <h4>Power consistency — NP / avg power ratio (closer to 1 = steadier effort)</h4>
+        <div class="chart-wrap"><canvas id="statsElevVsNP"></canvas></div>
+      </div>
+    </div>
+
+    <div class="chart-row single">
+      <div class="chart-card">
+        <h4>Aerobic decoupling — HR:power load over long rides (lower = better endurance)</h4>
+        <div class="chart-wrap"><canvas id="statsDecoupling"></canvas></div>
       </div>
     </div>
 
@@ -1639,123 +1646,126 @@ function renderComboStats() {
   }
   document.getElementById('statsNoData').style.display = 'none';
 
-  const outdoor = activities.filter(a => !a.zwift && (a.np || a.avgPower) && a.avgHR);
-  const sorted  = [...outdoor].sort((a, b) => new Date(a.date) - new Date(b.date));
-  const fmtDate = d => new Date((d||'').includes('T') ? d : d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const outdoor = activities
+    .filter(a => !a.zwift && (a.np || a.avgPower))
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
 
-  const pOpts = {
+  const fmtDate = d => new Date((d||'').includes('T') ? d : d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const labels  = outdoor.map(r => fmtDate(r.date));
+
+  const lineOpts = (yLabel, reverse) => ({
     responsive: true, maintainAspectRatio: false,
     plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1e2028', titleColor: '#e8eaf0', bodyColor: '#6b7080', borderColor: '#2a2d35', borderWidth: 1 } },
-    scales: { x: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 }, maxTicksLimit: 12 }, grid: { color: '#2a2d35' } }, y: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } } }
+    scales: {
+      x: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 }, maxTicksLimit: 10 }, grid: { color: '#2a2d35' } },
+      y: { reverse: !!reverse, ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' }, title: { display: true, text: yLabel, color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }
+    }
+  });
+
+  const makeLine = (id, data, color, yLabel, reverse) => {
+    destroyChart(id);
+    const c = document.getElementById(id);
+    if (!c || !data.some(v => v !== null)) return;
+    charts[id] = new Chart(c, {
+      type: 'line',
+      data: { labels, datasets: [{ data, borderColor: color, backgroundColor: color.replace(')', ',0.08)').replace('rgb', 'rgba'), fill: true, tension: 0.3, pointRadius: 3, pointBackgroundColor: color, borderWidth: 2, spanGaps: true }] },
+      options: lineOpts(yLabel, reverse)
+    });
   };
 
-  // ── 1. Power distribution (histogram of NP values) ──────────────────────
-  destroyChart('statsPowerDist');
-  const npVals = sorted.map(r => r.np || r.avgPower).filter(Boolean);
-  if (npVals.length) {
-    const buckets = {};
-    npVals.forEach(v => { const b = Math.floor(v / 10) * 10; buckets[b] = (buckets[b] || 0) + 1; });
-    const bKeys = Object.keys(buckets).map(Number).sort((a,b)=>a-b);
-    const c1 = document.getElementById('statsPowerDist');
-    if (c1) charts.statsPowerDist = new Chart(c1, {
-      type: 'bar',
-      data: { labels: bKeys.map(k => k + '-' + (k+10) + 'w'), datasets: [{ data: bKeys.map(k => buckets[k]), backgroundColor: bKeys.map(k => k >= ftp * 0.9 ? 'rgba(200,240,96,0.7)' : 'rgba(200,240,96,0.3)'), borderRadius: 3 }] },
-      options: { ...pOpts, plugins: { ...pOpts.plugins, tooltip: { ...pOpts.plugins.tooltip, callbacks: { label: ctx => ctx.raw + ' rides' } } }, scales: { ...pOpts.scales, x: { ...pOpts.scales.x, title: { display: true, text: 'NP range', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }, y: { ...pOpts.scales.y, title: { display: true, text: 'rides', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } } } }
-    });
-  }
+  // 1. Cardiac efficiency — bpm/watt (lower = fitter)
+  makeLine('statsPowerDist',
+    outdoor.map(r => r.avgHR && (r.np||r.avgPower) ? parseFloat((r.avgHR / (r.np||r.avgPower)).toFixed(3)) : null),
+    '#f0a060', 'bpm / watt', true
+  );
 
-  // ── 2. HR vs NP scatter — efficiency ────────────────────────────────────
-  destroyChart('statsHRvsPower');
-  const hrPwrData = sorted.filter(r => r.avgHR && (r.np || r.avgPower)).map(r => ({ x: r.np || r.avgPower, y: r.avgHR, label: fmtDate(r.date) }));
-  if (hrPwrData.length) {
-    const c2 = document.getElementById('statsHRvsPower');
-    if (c2) charts.statsHRvsPower = new Chart(c2, {
-      type: 'scatter',
-      data: { datasets: [{ data: hrPwrData, backgroundColor: 'rgba(200,240,96,0.5)', pointRadius: 5, pointHoverRadius: 7 }] },
-      options: { ...pOpts, plugins: { ...pOpts.plugins, tooltip: { ...pOpts.plugins.tooltip, callbacks: { label: ctx => hrPwrData[ctx.dataIndex].label + ': ' + ctx.parsed.x + 'w · ' + ctx.parsed.y + 'bpm' } } }, scales: { x: { ...pOpts.scales.x, title: { display: true, text: 'NP (watts)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }, y: { ...pOpts.scales.y, title: { display: true, text: 'Avg HR (bpm)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } } } }
-    });
-  }
-
-  // ── 3. Speed vs distance ────────────────────────────────────────────────
-  destroyChart('statsSpeedVsDist');
-  const spDistData = sorted.filter(r => r.avgSpeed && r.distMiles).map(r => ({ x: r.distMiles, y: parseFloat(r.avgSpeed.toFixed(1)), label: fmtDate(r.date) + ' · ' + r.name }));
-  if (spDistData.length) {
-    const c3 = document.getElementById('statsSpeedVsDist');
-    if (c3) charts.statsSpeedVsDist = new Chart(c3, {
-      type: 'scatter',
-      data: { datasets: [{ data: spDistData, backgroundColor: 'rgba(96,200,240,0.5)', pointRadius: 5, pointHoverRadius: 7 }] },
-      options: { ...pOpts, plugins: { ...pOpts.plugins, tooltip: { ...pOpts.plugins.tooltip, callbacks: { label: ctx => spDistData[ctx.dataIndex].label + ': ' + ctx.parsed.y + 'mph' } } }, scales: { x: { ...pOpts.scales.x, title: { display: true, text: 'Distance (mi)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }, y: { ...pOpts.scales.y, title: { display: true, text: 'Avg Speed (mph)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } } } }
-    });
-  }
-
-  // ── 4. Cardiac efficiency over time ─────────────────────────────────────
-  destroyChart('statsCardiac');
-  const cardiacData = sorted.filter(r => r.avgHR && (r.np || r.avgPower)).map(r => ({ x: fmtDate(r.date), y: parseFloat((r.avgHR / (r.np || r.avgPower)).toFixed(3)) }));
-  if (cardiacData.length) {
-    const c4 = document.getElementById('statsCardiac');
-    if (c4) charts.statsCardiac = new Chart(c4, {
-      type: 'line',
-      data: { labels: cardiacData.map(d => d.x), datasets: [{ data: cardiacData.map(d => d.y), borderColor: '#f0a060', backgroundColor: 'rgba(240,160,96,0.1)', fill: true, tension: 0.3, pointRadius: 4, pointBackgroundColor: '#f0a060', borderWidth: 2 }] },
-      options: { ...pOpts, plugins: { ...pOpts.plugins, tooltip: { ...pOpts.plugins.tooltip, callbacks: { label: ctx => 'bpm/watt: ' + ctx.raw } } }, scales: { ...pOpts.scales, y: { ...pOpts.scales.y, reverse: true, title: { display: true, text: 'bpm/watt (lower = fitter)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } } } }
-    });
-  }
-
-  // ── 5 & 6. PP Hill efforts — power vs time, HR vs time ─────────────────
+  // 2. PP Hill time — each effort chronologically (use segment data)
   const ppHill = segments.find(s => String(s.id) === '613198' || (s.name && s.name.toLowerCase().includes('prospect park hill')));
-  if (ppHill && ppHill.efforts.length) {
-    const hillSorted = [...ppHill.efforts].sort((a, b) => new Date(a.date) - new Date(b.date));
-    const hillLabels = hillSorted.map(e => fmtDate(e.date));
-
-    destroyChart('statsHillPower');
-    const c5 = document.getElementById('statsHillPower');
-    if (c5 && hillSorted.some(e => e.avgPower)) {
-      charts.statsHillPower = new Chart(c5, {
-        type: 'scatter',
-        data: { datasets: [{
-          data: hillSorted.filter(e => e.avgPower).map(e => ({ x: e.elapsed, y: e.avgPower, label: fmtDate(e.date) })),
-          backgroundColor: hillSorted.filter(e=>e.avgPower).map(e => e.elapsed === Math.min(...ppHill.efforts.map(x=>x.elapsed)) ? '#c8f060' : 'rgba(200,240,96,0.4)'),
-          pointRadius: 5, pointHoverRadius: 7
-        }] },
-        options: { ...pOpts, plugins: { ...pOpts.plugins, tooltip: { ...pOpts.plugins.tooltip, callbacks: { label: ctx => { const d = hillSorted.filter(e=>e.avgPower)[ctx.dataIndex]; return fmtDate(d.date) + ': ' + d.avgPower + 'w in ' + fmtSecs(d.elapsed); } } } }, scales: { x: { ...pOpts.scales.x, title: { display: true, text: 'Time (seconds)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }, y: { ...pOpts.scales.y, title: { display: true, text: 'Avg Power (w)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } } } }
-      });
-    }
-
-    destroyChart('statsHillHR');
-    const c6 = document.getElementById('statsHillHR');
-    if (c6 && hillSorted.some(e => e.avgHR)) {
-      charts.statsHillHR = new Chart(c6, {
-        type: 'scatter',
-        data: { datasets: [{
-          data: hillSorted.filter(e => e.avgHR).map(e => ({ x: e.elapsed, y: e.avgHR, label: fmtDate(e.date) })),
-          backgroundColor: 'rgba(240,96,96,0.5)',
-          pointRadius: 5, pointHoverRadius: 7
-        }] },
-        options: { ...pOpts, plugins: { ...pOpts.plugins, tooltip: { ...pOpts.plugins.tooltip, callbacks: { label: ctx => { const d = hillSorted.filter(e=>e.avgHR)[ctx.dataIndex]; return fmtDate(d.date) + ': ' + d.avgHR + 'bpm in ' + fmtSecs(d.elapsed); } } } }, scales: { x: { ...pOpts.scales.x, title: { display: true, text: 'Time (seconds)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }, y: { ...pOpts.scales.y, title: { display: true, text: 'Avg HR (bpm)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } } } }
-      });
-    }
-  }
-
-  // ── 7. Elevation vs NP scatter ──────────────────────────────────────────
-  destroyChart('statsElevVsNP');
-  const elevNPData = sorted.filter(r => r.elevGainFt && (r.np || r.avgPower)).map(r => ({ x: r.elevGainFt, y: r.np || r.avgPower, label: fmtDate(r.date) + ' · ' + r.distMiles + 'mi' }));
-  if (elevNPData.length) {
-    const c7 = document.getElementById('statsElevVsNP');
-    if (c7) charts.statsElevVsNP = new Chart(c7, {
-      type: 'scatter',
-      data: { datasets: [{ data: elevNPData, backgroundColor: 'rgba(160,96,240,0.5)', pointRadius: 5, pointHoverRadius: 7 }] },
-      options: { ...pOpts, plugins: { ...pOpts.plugins, tooltip: { ...pOpts.plugins.tooltip, callbacks: { label: ctx => elevNPData[ctx.dataIndex].label + ': ' + ctx.parsed.y + 'w NP' } } }, scales: { x: { ...pOpts.scales.x, title: { display: true, text: 'Elevation gain (ft)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }, y: { ...pOpts.scales.y, title: { display: true, text: 'NP (watts)', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } } } }
+  destroyChart('statsHRvsPower');
+  const c2 = document.getElementById('statsHRvsPower');
+  if (c2 && ppHill && ppHill.efforts.length) {
+    const hillEfforts = [...ppHill.efforts].sort((a, b) => new Date(a.date) - new Date(b.date));
+    charts.statsHRvsPower = new Chart(c2, {
+      type: 'line',
+      data: {
+        labels: hillEfforts.map(e => fmtDate(e.date)),
+        datasets: [
+          { label: 'Hill time', data: hillEfforts.map(e => e.elapsed), borderColor: '#c8f060', backgroundColor: 'rgba(200,240,96,0.08)', fill: true, tension: 0.3, pointRadius: 3, pointBackgroundColor: '#c8f060', borderWidth: 2 },
+          { label: 'PR', data: hillEfforts.map(() => ppHill.pr ? ppHill.pr.elapsed : null), borderColor: 'rgba(240,96,96,0.4)', pointRadius: 0, fill: false, borderDash: [5, 4], borderWidth: 1 }
+        ]
+      },
+      options: { ...lineOpts('seconds (lower = faster)', true), plugins: { ...lineOpts().plugins, legend: { labels: { color: '#6b7080', font: { family: 'DM Mono', size: 10 }, boxWidth: 10 } }, tooltip: { backgroundColor: '#1e2028', titleColor: '#e8eaf0', bodyColor: '#6b7080', callbacks: { label: ctx => ctx.dataset.label + ': ' + fmtSecs(ctx.raw) } } } }
     });
+  } else if (c2) {
+    c2.parentElement.innerHTML = '<div style="color:var(--muted);font-family:var(--mono);font-size:11px;padding:20px;text-align:center;">Sync Strava to see PP hill trend</div>';
   }
 
-  // ── Key numbers summary ──────────────────────────────────────────────────
-  const avgNP   = outdoor.length ? Math.round(outdoor.reduce((s,r) => s + (r.np||r.avgPower||0), 0) / outdoor.length) : null;
+  // 3. w/kg over time
+  makeLine('statsSpeedVsDist',
+    outdoor.map(r => r.np||r.avgPower ? parseFloat(((r.np||r.avgPower) / WEIGHT_KG).toFixed(2)) : null),
+    '#c8f060', 'w/kg'
+  );
+
+  // 4. HR drift — avg HR relative to NP (higher = more fatigue)
+  makeLine('statsCardiac',
+    outdoor.filter(r => r.avgHR && (r.np||r.avgPower)).map(r => parseFloat((r.avgHR / (r.np||r.avgPower) * 100).toFixed(1))),
+    '#f06060', 'HR:NP ratio × 100', true
+  );
+
+  // 5. Speed efficiency — mph per watt
+  makeLine('statsHillPower',
+    outdoor.map(r => r.avgSpeed && (r.np||r.avgPower) ? parseFloat((r.avgSpeed / (r.np||r.avgPower)).toFixed(4)) : null),
+    '#60c8f0', 'mph / watt'
+  );
+
+  // 6. Climbing rate — ft per mile
+  makeLine('statsHillHR',
+    outdoor.map(r => r.elevGainFt && r.distMiles ? parseFloat((r.elevGainFt / r.distMiles).toFixed(1)) : null),
+    '#a060f0', 'ft / mile'
+  );
+
+  // 7. Power consistency — NP / avg power ratio (closer to 1 = steadier)
+  makeLine('statsElevVsNP',
+    outdoor.map(r => r.np && r.avgPower ? parseFloat((r.np / r.avgPower).toFixed(2)) : null),
+    '#f0a060', 'NP / avg power'
+  );
+
+  // 8. Aerobic decoupling — HR:power second half vs first half (lower = better endurance)
+  // Approximate from Strava summary: compare avg HR to NP weighted by duration
+  // True decoupling needs stream data, so we use a proxy:
+  // We track how HR:NP ratio changes as ride duration increases (longer = more decoupling pressure)
+  destroyChart('statsDecoupling');
+  const dc = document.getElementById('statsDecoupling');
+  const dcData = outdoor.filter(r => r.avgHR && (r.np||r.avgPower) && r.durationSec > 3600).map(r => {
+    // Proxy: (HR / NP) * (duration / 3600) — penalizes HR creep on longer rides
+    const base = r.avgHR / (r.np||r.avgPower);
+    const hrs = r.durationSec / 3600;
+    return { date: r.date, val: parseFloat((base * hrs * 100).toFixed(2)) };
+  });
+  if (dc && dcData.length) {
+    charts.statsDecoupling = new Chart(dc, {
+      type: 'line',
+      data: {
+        labels: dcData.map(d => fmtDate(d.date)),
+        datasets: [{ data: dcData.map(d => d.val), borderColor: '#c8f060', backgroundColor: 'rgba(200,240,96,0.08)', fill: true, tension: 0.3, pointRadius: 3, pointBackgroundColor: '#c8f060', borderWidth: 2 }]
+      },
+      options: lineOpts('HR:NP × hrs (lower = better endurance)', true)
+    });
+  } else if (dc) {
+    dc.parentElement.innerHTML = '<div style="color:var(--muted);font-family:var(--mono);font-size:11px;padding:20px;text-align:center;">Needs rides over 1hr to calculate</div>';
+  }
+
+  // Key numbers summary
+  const avgNP    = outdoor.length ? Math.round(outdoor.reduce((s,r) => s + (r.np||r.avgPower||0), 0) / outdoor.length) : null;
   const avgHRAll = outdoor.filter(r=>r.avgHR).length ? Math.round(outdoor.filter(r=>r.avgHR).reduce((s,r)=>s+r.avgHR,0)/outdoor.filter(r=>r.avgHR).length) : null;
-  const bestNP  = outdoor.length ? Math.max(...outdoor.map(r => r.np||r.avgPower||0)) : null;
-  const avgWkg  = avgNP ? parseFloat((avgNP / WEIGHT_KG).toFixed(2)) : null;
-  const bestWkg = bestNP ? parseFloat((bestNP / WEIGHT_KG).toFixed(2)) : null;
-  const totalElev = outdoor.reduce((s,r) => s + (r.elevGainFt||0), 0);
+  const bestNP   = outdoor.length ? Math.max(...outdoor.map(r => r.np||r.avgPower||0)) : null;
+  const avgWkg   = avgNP ? parseFloat((avgNP / WEIGHT_KG).toFixed(2)) : null;
+  const bestWkg  = bestNP ? parseFloat((bestNP / WEIGHT_KG).toFixed(2)) : null;
+  const totalElev  = outdoor.reduce((s,r) => s + (r.elevGainFt||0), 0);
   const totalMiles = outdoor.reduce((s,r) => s + (r.distMiles||0), 0);
-  const cardiac = avgNP && avgHRAll ? parseFloat((avgHRAll/avgNP).toFixed(3)) : null;
+  const cardiac    = avgNP && avgHRAll ? parseFloat((avgHRAll/avgNP).toFixed(3)) : null;
+  const recentCardiac = outdoor.slice(-5).filter(r=>r.avgHR&&(r.np||r.avgPower));
+  const rcAvg = recentCardiac.length ? parseFloat((recentCardiac.reduce((s,r)=>s+r.avgHR/(r.np||r.avgPower),0)/recentCardiac.length).toFixed(3)) : null;
 
   document.getElementById('statsKeyNumbers').innerHTML =
     '<div class="section-title" style="margin-bottom:14px;">Key numbers — ' + outdoor.length + ' outdoor rides</div>'
@@ -1767,8 +1777,8 @@ function renderComboStats() {
         ['Best w/kg', bestWkg || '--', 'single ride'],
         ['Avg HR', avgHRAll ? avgHRAll + 'bpm' : '--', ''],
         ['Cardiac cost', cardiac ? cardiac + ' bpm/w' : '--', 'lower = fitter'],
-        ['Total miles', Math.round(totalMiles) + 'mi', outdoor.length + ' outdoor rides'],
-        ['Total elevation', Math.round(totalElev).toLocaleString() + 'ft', 'all outdoor rides'],
+        ['Recent cardiac', rcAvg ? rcAvg + ' bpm/w' : '--', 'last 5 rides'],
+        ['Total elevation', Math.round(totalElev).toLocaleString() + 'ft', Math.round(totalMiles) + 'mi ridden'],
       ].map(([label, value, sub]) =>
         '<div style="background:var(--surface2);border-radius:6px;padding:12px 14px;">'
         + '<div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:0.08em;margin-bottom:4px;">' + label + '</div>'
