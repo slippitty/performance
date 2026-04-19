@@ -1505,7 +1505,7 @@ function renderProgress() {
   const fmtLabel = d => new Date((d || '').includes('T') ? d : d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   const labels = sorted.map(r => fmtLabel(r.date));
   const pOpts = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { backgroundColor: '#1e2028', titleColor: '#e8eaf0', bodyColor: '#6b7080' } }, scales: { x: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 }, maxTicksLimit: 12 }, grid: { color: '#2a2d35' } }, y: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } } } };
-  const outdoorRides = sorted.filter(r => !r.zwift && (r.metrics.np || r.metrics.avgPower));
+  const outdoorRides = sorted.filter(r => !r.zwift && (r.metrics.np || r.metrics.avgPower) && (r.metrics.distMiles || 0) >= 5 && (r.metrics.np || r.metrics.avgPower || 0) >= 50);
   const zwiftRides   = sorted.filter(r =>  r.zwift && (r.metrics.np || r.metrics.avgPower));
   const allDates = sorted.filter(r => r.metrics.np || r.metrics.avgPower).map(r => fmtLabel(r.date));
   const uniqueDates = [...new Set(allDates)];
@@ -1630,7 +1630,7 @@ function renderComboStats() {
   document.getElementById('statsNoData').style.display = 'none';
 
   const outdoor = activities
-    .filter(a => !a.zwift && (a.np || a.avgPower))
+    .filter(a => !a.zwift && (a.np || a.avgPower) && a.distMiles >= 5 && (a.np || a.avgPower) >= 50)
     .sort((a, b) => new Date(a.date) - new Date(b.date));
 
   const fmtDate = d => new Date((d||'').includes('T') ? d : d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
@@ -1644,6 +1644,7 @@ function renderComboStats() {
       y: { reverse: !!reverse, ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' }, title: { display: true, text: yLabel, color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }
     }
   });
+  const lineOptsReverse = (yLabel) => lineOpts(yLabel, true);
 
   const makeLine = (id, data, color, yLabel, reverse) => {
     destroyChart(id);
@@ -1659,7 +1660,7 @@ function renderComboStats() {
   // 1. Cardiac efficiency — bpm/watt (lower = fitter)
   makeLine('statsPowerDist',
     outdoor.map(r => r.avgHR && (r.np||r.avgPower) ? parseFloat((r.avgHR / (r.np||r.avgPower)).toFixed(3)) : null),
-    '#f0a060', 'bpm / watt', true
+    '#f0a060', 'bpm / watt', false
   );
 
   // 2. PP Hill time — each effort chronologically (use segment data)
@@ -1692,7 +1693,7 @@ function renderComboStats() {
   // 4. HR drift — avg HR relative to NP (higher = more fatigue)
   makeLine('statsCardiac',
     outdoor.filter(r => r.avgHR && (r.np||r.avgPower)).map(r => parseFloat((r.avgHR / (r.np||r.avgPower) * 100).toFixed(1))),
-    '#f06060', 'HR:NP ratio × 100', true
+    '#f06060', 'HR:NP ratio × 100', false
   );
 
   // 5. Speed efficiency — mph per watt
@@ -1732,7 +1733,7 @@ function renderComboStats() {
         labels: dcData.map(d => fmtDate(d.date)),
         datasets: [{ data: dcData.map(d => d.val), borderColor: '#c8f060', backgroundColor: 'rgba(200,240,96,0.08)', fill: true, tension: 0.3, pointRadius: 3, pointBackgroundColor: '#c8f060', borderWidth: 2 }]
       },
-      options: lineOpts('HR:NP × hrs (lower = better endurance)', true)
+      options: lineOpts('HR:NP × hrs (lower = better endurance)', false)
     });
   } else if (dc) {
     dc.parentElement.innerHTML = '<div style="color:var(--muted);font-family:var(--mono);font-size:11px;padding:20px;text-align:center;">Needs rides over 1hr to calculate</div>';
