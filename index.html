@@ -436,10 +436,7 @@
     <p>Upload an activity to see segment breakdowns</p>
   </div>
   <div id="segmentsContent" style="display:none">
-    <div class="section-title" style="margin-bottom:20px;">Prospect Park Hill Benchmark — 0.48mi @ 5%</div>
-    <div class="benchmark-row" id="benchmarkRow"></div>
-
-    <div class="section-title" style="margin-top:28px;margin-bottom:16px;">Lap breakdown</div>
+    <div class="section-title" style="margin-bottom:16px;">Lap breakdown</div>
     <div class="chart-card" style="margin-bottom:20px;">
       <div class="chart-wrap" style="height:180px;"><canvas id="lapChart"></canvas></div>
     </div>
@@ -459,6 +456,12 @@
         </thead>
         <tbody id="segTableBody"></tbody>
       </table>
+    </div>
+    <div id="segHillChartSection" style="display:none;margin-top:24px;">
+      <div class="chart-card">
+        <h4>PP Hill — fastest &amp; avg per session (Strava)</h4>
+        <div class="chart-wrap tall"><canvas id="segHillStrava"></canvas></div>
+      </div>
     </div>
   </div>
 </div>
@@ -499,16 +502,7 @@
         <div class="chart-wrap"><canvas id="progressElevChart"></canvas></div>
       </div>
     </div>
-    <div class="chart-row">
-      <div class="chart-card">
-        <h4>PP Hill — best VAM per ride (m/hr) <span style="font-size:9px;color:var(--muted);font-weight:normal;">requires FIT upload</span></h4>
-        <div class="chart-wrap"><canvas id="progressVAMChart"></canvas></div>
-      </div>
-      <div class="chart-card">
-        <h4>PP Hill — best w/kg per ride <span style="font-size:9px;color:var(--muted);font-weight:normal;">requires FIT upload</span></h4>
-        <div class="chart-wrap"><canvas id="progressWkgChart"></canvas></div>
-      </div>
-    </div>
+
     <div class="section-title" style="margin-top:8px;">Outdoor rides</div>
     <div class="rides-list" id="allRidesList"></div>
 
@@ -776,7 +770,7 @@ function showTab(name) {
     if ((b.getAttribute('onclick') || '').includes("'" + name + "'")) b.classList.add('active');
   });
   if (name === 'progress')  { renderProgress(); if (isStravaConnected()) { renderStravaProgress(); renderStravaProgressInProgress(); } }
-  if (name === 'segments')  { if (currentRide) renderSegments(currentRide); }
+  if (name === 'segments')  { if (currentRide) renderSegments(currentRide); renderSegmentHillChart(); }
   if (name === 'analysis')  { if (currentRide) renderAnalysis(currentRide); else loadLatestStravaActivity(); }
   if (name === 'strava')    { renderStravaButton(); if (isStravaConnected()) { renderStravaContent(); renderStravaProgress(); } }
   if (name === 'plan')      { renderPlan(); }
@@ -1120,7 +1114,7 @@ async function loadLatestStravaActivity() {
     return;
   }
   try {
-    const activities = await stravaFetch('/athlete/activities?per_page=1');
+    const activities = await stravaFetch('/athlete/activities?per_page=1&t=' + Date.now());
     if (!activities || !activities.length) { if (analysisEmpty) analysisEmpty.innerHTML = '<h3>No activities found</h3>'; return; }
     const latest = activities[0];
     const [detail, streams] = await Promise.all([
@@ -1463,18 +1457,7 @@ function renderSegments(ride) {
   existing.forEach(el => el.remove());
   const fmtTime = s => { const m = Math.floor(s / 60), sec = Math.floor(s % 60); return m + ':' + String(sec).padStart(2, '0'); };
   const { laps, metrics } = ride;
-  const benchTargets = [
-    { label: 'Baseline', target: 155, targetSpeed: 11.2, targetHR: 144, targetWatts: 168 },
-    { label: 'Test 2 — May 27', target: 140, targetSpeed: 12.0, targetHR: 142, targetWatts: 178 },
-    { label: 'Test 3 — Jun 12', target: 130, targetSpeed: 13.0, targetHR: 140, targetWatts: 188 },
-    { label: 'Final — Jul 5',   target: 120, targetSpeed: 13.8, targetHR: 138, targetWatts: 198 },
-  ];
   const passes = ride.hillPasses || [];
-  const bestPass = passes.length ? passes.reduce((b, p) => p.durSec < b.durSec ? p : b, passes[0]) : null;
-  document.getElementById('benchmarkRow').innerHTML = benchTargets.map((b, i) => {
-    const isThis = i === 0 && bestPass;
-    return '<div class="bench-card ' + (isThis ? 'achieved' : 'pending') + '"><div class="date">' + b.label + '</div><div class="time">' + (isThis ? fmtTime(bestPass.durSec) : 'sub ' + fmtTime(b.target)) + '</div><div class="meta">' + (isThis ? (bestPass.avgSpeed || '--') + 'mph · ' + (bestPass.avgHR || '--') + 'bpm' : '>' + b.targetSpeed + 'mph · <' + b.targetHR + 'bpm') + '</div><div class="target">target: ' + fmtTime(b.target) + ' · ' + b.targetWatts + 'w</div></div>';
-  }).join('');
   if (!laps.length) { document.getElementById('segTableBody').innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:24px;">No lap data detected</td></tr>'; return; }
   const bestLapPower = laps.reduce((best, l) => l.avgPower > (best && best.avgPower || 0) ? l : best, null);
   document.getElementById('segTableBody').innerHTML = laps.map(lap => {
@@ -1789,12 +1772,56 @@ function renderComboStats() {
     + '</div>';
 }
 
+
+// ── SEGMENT HILL CHART (in Segments tab) ──────────────────────────────────
+function renderSegmentHillChart() {
+  const segments = JSON.parse(localStorage.getItem('strava_segments') || '[]');
+  const section  = document.getElementById('segHillChartSection');
+  if (!section) return;
+  const ppHill = segments.find(s => String(s.id) === '613198' || (s.name && s.name.toLowerCase().includes('prospect park hill')));
+  if (!ppHill || !ppHill.efforts.length) { section.style.display = 'none'; return; }
+  section.style.display = 'block';
+  const byDate = {};
+  for (const eff of ppHill.efforts) {
+    const day = new Date(eff.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    if (!byDate[day]) byDate[day] = [];
+    byDate[day].push(eff.elapsed);
+  }
+  const days    = Object.keys(byDate).sort((a, b) => new Date(a + ' 2026') - new Date(b + ' 2026'));
+  const fastest = days.map(d => Math.min(...byDate[d]));
+  const average = days.map(d => Math.round(byDate[d].reduce((a, b) => a + b, 0) / byDate[d].length));
+  const counts  = days.map(d => byDate[d].length);
+  destroyChart('segHillStrava');
+  const c = document.getElementById('segHillStrava');
+  if (!c) return;
+  charts.segHillStrava = new Chart(c, {
+    type: 'line',
+    data: {
+      labels: days.map((d, i) => d + (counts[i] > 1 ? ' (x' + counts[i] + ')' : '')),
+      datasets: [
+        { label: 'Fastest', data: fastest, borderColor: '#c8f060', backgroundColor: 'rgba(200,240,96,0.1)', fill: false, tension: 0.3, pointRadius: 5, pointBackgroundColor: '#c8f060', borderWidth: 2 },
+        { label: 'Average', data: average, borderColor: '#60c8f0', fill: false, tension: 0.3, pointRadius: 4, pointBackgroundColor: '#60c8f0', borderDash: [4, 3], borderWidth: 1.5 },
+        { label: 'PR', data: days.map(() => ppHill.pr ? ppHill.pr.elapsed : null), borderColor: 'rgba(240,96,96,0.5)', pointRadius: 0, fill: false, borderDash: [6, 4], borderWidth: 1 },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#6b7080', font: { family: 'DM Mono', size: 10 }, boxWidth: 12 } }, tooltip: { backgroundColor: '#1e2028', titleColor: '#e8eaf0', bodyColor: '#6b7080', callbacks: { label: ctx => ctx.dataset.label + ': ' + fmtSecs(ctx.raw) } } },
+      scales: {
+        x: { ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 } }, grid: { color: '#2a2d35' } },
+        y: { reverse: true, ticks: { color: '#6b7080', font: { family: 'DM Mono', size: 10 }, callback: v => fmtSecs(v) }, grid: { color: '#2a2d35' }, title: { display: true, text: 'lower = faster', color: '#6b7080', font: { family: 'DM Mono', size: 10 } } }
+      }
+    }
+  });
+}
+
 // ── INIT ───────────────────────────────────────────────────────────────────
 renderStravaButton();
 handleStravaCallback();
 if (isStravaConnected()) { renderStravaProgressInProgress(); loadLatestStravaActivity(); }
 renderPlan();
 renderProgress();
+renderSegmentHillChart();
 
 </script>
 </body>
